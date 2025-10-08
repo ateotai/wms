@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install frontend deps
+        run: npm ci
+
+      - name: Lint frontend
+        run: npm run lint --if-present
+
+      - name: Typecheck frontend
+        run: npm run typecheck --if-present
+
+      - name: Build frontend
+        run: npm run build --if-present
+
+      - name: Install backend deps
+        working-directory: server
+        run: npm ci
+
+      - name: Start backend (smoke test)
+        working-directory: server
+        run: |
+          node index.js &
+          sleep 5
+          pgrep -f "node index.js" || (echo "Backend failed to start" && exit 1)
