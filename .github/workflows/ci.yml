@@ -9,6 +9,15 @@ on:
 jobs:
   build-and-lint:
     runs-on: ubuntu-latest
+    env:
+      # Frontend (Vite) secrets
+      VITE_AUTH_BACKEND_URL: ${{ secrets.VITE_AUTH_BACKEND_URL }}
+      VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+      VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+      # Backend (Node/Express) secrets
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -18,6 +27,12 @@ jobs:
         with:
           node-version: '18'
           cache: 'npm'
+
+      - name: Write frontend .env from secrets
+        run: |
+          echo "VITE_AUTH_BACKEND_URL=${VITE_AUTH_BACKEND_URL}" > .env
+          echo "VITE_SUPABASE_URL=${VITE_SUPABASE_URL}" >> .env
+          echo "VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}" >> .env
 
       - name: Install frontend deps
         run: npm ci
@@ -34,6 +49,13 @@ jobs:
       - name: Install backend deps
         working-directory: server
         run: npm ci
+
+      - name: Write backend .env from secrets
+        working-directory: server
+        run: |
+          echo "SUPABASE_URL=${SUPABASE_URL}" > .env
+          echo "SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}" >> .env
+          echo "JWT_SECRET=${JWT_SECRET}" >> .env
 
       - name: Start backend (smoke test)
         working-directory: server
