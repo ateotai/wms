@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { UserRole } from '../types/roles';
+import { UserRole, ROLE_PERMISSIONS } from '../types/roles';
+import { initializeLocalUsers, authenticateUser, createLocalUser } from '../utils/localAuth';
 
 interface AuthUser {
   id: string;
@@ -34,6 +35,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Inicializar sesión local controlada por el sistema (sin Supabase Auth)
   useEffect(() => {
     try {
+      // Asegura usuarios locales por defecto si no hay backend
+      if (!AUTH_BACKEND_URL) {
+        initializeLocalUsers();
+      }
       const raw = localStorage.getItem(LOCAL_USER_KEY);
       if (raw) {
         const parsed: AuthUser = JSON.parse(raw);
@@ -49,7 +54,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signIn = async (email: string, password: string) => {
     try {
       if (!AUTH_BACKEND_URL) {
-        return { error: { message: 'Backend de autenticación no configurado' } };
+        // Fallback a autenticación local cuando no hay backend configurado (demo en Vercel)
+        const result = authenticateUser({ email, password });
+        if (!result.success || !result.user) {
+          return { error: { message: result.error || 'Credenciales inválidas' } };
+        }
+        const mapped: AuthUser = {
+          id: result.user.id,
+          email: result.user.email,
+          full_name: result.user.full_name || '',
+          role: (result.user.role as UserRole) || UserRole.OPERATOR,
+          permissions: result.user.permissions || [],
+          is_active: result.user.is_active ?? true,
+          last_login: result.user.last_login,
+        };
+        setUser(mapped);
+        localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(mapped));
+        localStorage.removeItem('app_token');
+        return { error: null };
       }
       const resp = await fetch(`${AUTH_BACKEND_URL}/login`, {
         method: 'POST',
@@ -83,7 +105,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signUp = async (email: string, password: string, fullName: string) => {
     try {
       if (!AUTH_BACKEND_URL) {
-        return { error: { message: 'Backend de autenticación no configurado' } };
+        // Registro local cuando no hay backend
+        const res = createLocalUser({
+          email,
+          password,
+          full_name: fullName,
+          role: UserRole.OPERATOR,
+          permissions: ROLE_PERMISSIONS[UserRole.OPERATOR],
+          is_active: true,
+        } as any);
+        if (!res.success) {
+          return { error: { message: res.error || 'No se pudo registrar' } };
+        }
+        return { error: null };
       }
       const resp = await fetch(`${AUTH_BACKEND_URL}/signup`, {
         method: 'POST',
