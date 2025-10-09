@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   FileText, 
   Download, 
@@ -52,7 +52,7 @@ export function ShippingDocuments() {
   const [filterStatus, setFilterStatus] = useState<string>('all');
 
   // Mock data
-  const documents: ShippingDocument[] = [
+  const defaultDocuments: ShippingDocument[] = [
     {
       id: '1',
       type: 'label',
@@ -148,6 +148,82 @@ export function ShippingDocuments() {
       pages: 1
     }
   ];
+
+  const [documents, setDocuments] = useState<ShippingDocument[]>(() => {
+    try {
+      const saved = localStorage.getItem('shippingDocuments');
+      return saved ? JSON.parse(saved) : defaultDocuments;
+    } catch (e) {
+      return defaultDocuments;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('shippingDocuments', JSON.stringify(documents));
+    } catch (e) {
+      // ignore storage errors
+    }
+  }, [documents]);
+
+  const [showNewDocModal, setShowNewDocModal] = useState(false);
+  const [newDocForm, setNewDocForm] = useState({
+    type: 'label' as ShippingDocument['type'],
+    orderNumber: '',
+    carrier: '',
+    trackingNumber: '',
+    customerName: '',
+    customerEmail: '',
+    notes: ''
+  });
+
+  const openNewDocumentModal = () => {
+    setNewDocForm({
+      type: 'label',
+      orderNumber: '',
+      carrier: '',
+      trackingNumber: '',
+      customerName: '',
+      customerEmail: '',
+      notes: ''
+    });
+    setShowNewDocModal(true);
+  };
+
+  const typePrefixes: Record<ShippingDocument['type'], string> = {
+    label: 'LBL',
+    invoice: 'INV',
+    manifest: 'MAN',
+    customs: 'CUS',
+    receipt: 'REC',
+    certificate: 'CERT'
+  };
+
+  const handleSaveNewDocument = () => {
+    const id = Date.now().toString();
+    const createdAt = new Date().toISOString();
+    const type = newDocForm.type;
+    const countOfType = documents.filter(d => d.type === type).length + 1;
+    const documentNumber = `${typePrefixes[type]}-${new Date().getFullYear()}-${String(countOfType).padStart(3, '0')}`;
+    const newDoc: ShippingDocument = {
+      id,
+      type,
+      documentNumber,
+      orderId: id,
+      orderNumber: newDocForm.orderNumber || `ORD-${new Date().getFullYear()}-${id.slice(-3)}`,
+      carrier: newDocForm.carrier || 'Sin transportista',
+      trackingNumber: newDocForm.trackingNumber || undefined,
+      customer: {
+        name: newDocForm.customerName || 'Cliente',
+        email: newDocForm.customerEmail || 'cliente@email.com'
+      },
+      status: 'draft',
+      createdAt,
+      notes: newDocForm.notes || undefined
+    };
+    setDocuments(prev => [...prev, newDoc]);
+    setShowNewDocModal(false);
+  };
 
   const getTypeColor = (type: string) => {
     switch (type) {
@@ -261,7 +337,7 @@ export function ShippingDocuments() {
           </span>
         </div>
         <div className="flex items-center space-x-2">
-          <button className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
+          <button onClick={openNewDocumentModal} className="inline-flex items-center px-3 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
             <Plus className="w-4 h-4 mr-2" />
             Nuevo Documento
           </button>
@@ -708,6 +784,118 @@ export function ShippingDocuments() {
                 className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
               >
                 Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Document Modal */}
+      {showNewDocModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-2xl shadow-lg rounded-md bg-white">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Nuevo Documento</h3>
+              <button
+                onClick={() => setShowNewDocModal(false)}
+                className="text-gray-400 hover:text-gray-600"
+                aria-label="Cerrar"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Tipo</label>
+                <select
+                  value={newDocForm.type}
+                  onChange={(e) => setNewDocForm({ ...newDocForm, type: e.target.value as ShippingDocument['type'] })}
+                  className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                >
+                  <option value="label">Etiqueta</option>
+                  <option value="invoice">Factura</option>
+                  <option value="manifest">Manifiesto</option>
+                  <option value="customs">Aduanas</option>
+                  <option value="receipt">Recibo</option>
+                  <option value="certificate">Certificado</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Orden</label>
+                <input
+                  type="text"
+                  value={newDocForm.orderNumber}
+                  onChange={(e) => setNewDocForm({ ...newDocForm, orderNumber: e.target.value })}
+                  placeholder="ORD-2024-001"
+                  className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Transportista</label>
+                <input
+                  type="text"
+                  value={newDocForm.carrier}
+                  onChange={(e) => setNewDocForm({ ...newDocForm, carrier: e.target.value })}
+                  placeholder="DHL Express"
+                  className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Tracking (opcional)</label>
+                <input
+                  type="text"
+                  value={newDocForm.trackingNumber}
+                  onChange={(e) => setNewDocForm({ ...newDocForm, trackingNumber: e.target.value })}
+                  placeholder="ABC123456789"
+                  className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Cliente</label>
+                <input
+                  type="text"
+                  value={newDocForm.customerName}
+                  onChange={(e) => setNewDocForm({ ...newDocForm, customerName: e.target.value })}
+                  placeholder="Nombre del cliente"
+                  className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Email del cliente</label>
+                <input
+                  type="email"
+                  value={newDocForm.customerEmail}
+                  onChange={(e) => setNewDocForm({ ...newDocForm, customerEmail: e.target.value })}
+                  placeholder="email@cliente.com"
+                  className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700">Notas</label>
+                <textarea
+                  value={newDocForm.notes}
+                  onChange={(e) => setNewDocForm({ ...newDocForm, notes: e.target.value })}
+                  placeholder="Notas del documento"
+                  className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                  rows={3}
+                />
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end space-x-3">
+              <button
+                onClick={() => setShowNewDocModal(false)}
+                className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleSaveNewDocument}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Guardar Documento
               </button>
             </div>
           </div>

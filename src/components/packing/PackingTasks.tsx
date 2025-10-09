@@ -75,6 +75,99 @@ export function PackingTasks() {
     notes: ''
   });
 
+  // Órdenes guardadas (ShippingOrders) desde localStorage
+  const loadSavedOrders = (): any[] => {
+    try {
+      const str = localStorage.getItem('packing_orders');
+      const arr = str ? JSON.parse(str) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch (e) {
+      console.warn('No se pudieron leer órdenes desde localStorage:', e);
+      return [];
+    }
+  };
+
+  const handleLoadFromOrder = async () => {
+    const orderNum = String(newTaskForm.orderNumber || '').trim();
+    if (!orderNum) {
+      alert('Ingresa el número de orden');
+      return;
+    }
+
+    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
+    const token = typeof window !== 'undefined' ? localStorage.getItem('app_token') : null;
+
+    // Intento 1: Backend real
+    if (AUTH_BACKEND_URL && token) {
+      try {
+        const resp = await fetch(`${AUTH_BACKEND_URL}/sales_orders/${encodeURIComponent(orderNum)}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (resp.ok) {
+          const json = await resp.json();
+          const so = json?.sales_order || null;
+          if (!so) throw new Error('Respuesta inválida del backend');
+
+          // Mapear items del backend a PackingItem
+          const mappedItems: PackingItem[] = (so.items || []).map((it: any, idx: number) => ({
+            id: `ord-${so.id || 'x'}-${idx}`,
+            product: (it?.products?.name || it?.products?.sku || it?.product || ''),
+            sku: (it?.products?.sku || it?.sku || ''),
+            quantity: Number(it?.quantity || 0),
+            quantityPacked: 0,
+            weight: Number(it?.products?.weight || 0),
+            dimensions: typeof it?.products?.dimensions === 'string' ? it?.products?.dimensions : '',
+            location: '',
+            barcode: (it?.products?.sku || ''),
+            fragile: false,
+          }));
+
+          // Prefijar asignado/notas si vinieran en la respuesta (no obligatorio)
+          setNewTaskForm((prev) => ({
+            ...prev,
+            assignedTo: prev.assignedTo || '',
+            notes: prev.notes || '',
+          }));
+
+          if (mappedItems.length > 0) {
+            setNewItems(mappedItems);
+            return; // Éxito con backend, salir
+          }
+        }
+      } catch (e) {
+        console.warn('Fallo al cargar desde backend, haré fallback a localStorage:', e);
+      }
+    }
+
+    // Intento 2: Fallback a órdenes guardadas en localStorage
+    const list = loadSavedOrders();
+    const found = list.find((o: any) => String(o.orderNumber).trim() === orderNum);
+    if (!found) {
+      alert('No se encontró una orden con ese número en las Órdenes de Envío.');
+      return;
+    }
+    setNewTaskForm((prev) => ({
+      ...prev,
+      assignedTo: (found.assignedTo ?? prev.assignedTo ?? ''),
+      notes: found.notes ?? prev.notes ?? '',
+    }));
+    const mappedItems: PackingItem[] = (found.items || []).map((it: any, idx: number) => ({
+      id: `ord-${found.id || 'x'}-${idx}`,
+      product: it.product || '',
+      sku: it.sku || '',
+      quantity: Number(it.quantity || 0),
+      quantityPacked: 0,
+      weight: Number(it.weight || 0),
+      dimensions: it.dimensions || '',
+      location: '',
+      barcode: '',
+      fragile: false,
+    }));
+    if (mappedItems.length > 0) {
+      setNewItems(mappedItems);
+    }
+  };
+
   // Mock data
   const [tasks, setTasks] = useState<PackingTask[]>([
     {
@@ -715,8 +808,22 @@ export function PackingTasks() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700">Orden</label>
-                <input type="text" value={newTaskForm.orderNumber} onChange={(e) => setNewTaskForm({ ...newTaskForm, orderNumber: e.target.value })}
-                  className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500" />
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newTaskForm.orderNumber}
+                    onChange={(e) => setNewTaskForm({ ...newTaskForm, orderNumber: e.target.value })}
+                    className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleLoadFromOrder}
+                    className="mt-1 px-3 py-2 border border-gray-300 rounded-md text-sm hover:bg-gray-50"
+                    title="Buscar y cargar datos de la orden"
+                  >
+                    Buscar
+                  </button>
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700">Asignado a</label>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   ShoppingCart, 
   MapPin, 
@@ -40,7 +40,7 @@ interface PickingTask {
 }
 
 export function PickingTasks() {
-  const [tasks, setTasks] = useState<PickingTask[]>([
+  const initialTasks: PickingTask[] = [
     {
       id: '1',
       orderNumber: 'ORD-2024-001',
@@ -95,7 +95,37 @@ export function PickingTasks() {
       dueDate: '2024-01-20T11:00:00',
       notes: 'Completado sin incidencias'
     }
-  ]);
+  ];
+
+  const [tasks, setTasks] = useState<PickingTask[]>(() => {
+    try {
+      const raw = localStorage.getItem('picking_tasks');
+      if (raw) return JSON.parse(raw);
+    } catch (e) {
+      console.warn('No se pudo leer picking_tasks de localStorage', e);
+    }
+    return initialTasks;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('picking_tasks', JSON.stringify(tasks));
+    } catch (e) {
+      console.warn('No se pudo guardar picking_tasks en localStorage', e);
+    }
+  }, [tasks]);
+
+  // Escucha actualizaciones externas (creación desde el dashboard)
+  useEffect(() => {
+    const handler = () => {
+      try {
+        const raw = localStorage.getItem('picking_tasks');
+        if (raw) setTasks(JSON.parse(raw));
+      } catch {}
+    };
+    window.addEventListener('picking_tasks_updated', handler as EventListener);
+    return () => window.removeEventListener('picking_tasks_updated', handler as EventListener);
+  }, []);
 
   const [selectedTask, setSelectedTask] = useState<PickingTask | null>(null);
   const [showDetails, setShowDetails] = useState(false);

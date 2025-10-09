@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Truck, 
   Calendar, 
@@ -48,7 +48,7 @@ export const ASNManagement: React.FC = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
 
   // Mock data
-  const asns: ASN[] = [
+  const defaultAsns: ASN[] = [
     {
       id: '1',
       asnNumber: 'ASN-2024-001',
@@ -149,6 +149,75 @@ export const ASNManagement: React.FC = () => {
     }
   ];
 
+  // Estado con persistencia
+  const [asns, setAsns] = useState<ASN[]>(() => {
+    try {
+      const saved = localStorage.getItem('asnList');
+      return saved ? JSON.parse(saved) : defaultAsns;
+    } catch (e) {
+      return defaultAsns;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('asnList', JSON.stringify(asns));
+    } catch (e) {
+      // Ignorar errores de almacenamiento
+    }
+  }, [asns]);
+
+  // Formulario de creación
+  const [newAsnForm, setNewAsnForm] = useState({
+    poNumber: '',
+    supplier: '',
+    carrier: '',
+    trackingNumber: '',
+    shipDate: '',
+    expectedDate: '',
+    dockDoor: ''
+  });
+
+  const openCreateModal = () => {
+    setNewAsnForm({
+      poNumber: '',
+      supplier: '',
+      carrier: '',
+      trackingNumber: '',
+      shipDate: '',
+      expectedDate: '',
+      dockDoor: ''
+    });
+    setShowCreateModal(true);
+  };
+
+  const handleSaveNewASN = () => {
+    const id = Date.now().toString();
+    const year = new Date().getFullYear();
+    const count = asns.length + 1;
+    const asnNumber = `ASN-${year}-${String(count).padStart(3, '0')}`;
+    const shipDate = newAsnForm.shipDate || new Date().toISOString().slice(0, 10);
+    const expectedDate = newAsnForm.expectedDate || shipDate;
+
+    const newASN: ASN = {
+      id,
+      asnNumber,
+      poNumber: newAsnForm.poNumber || `PO-${year}-${String(count).padStart(3, '0')}`,
+      supplier: newAsnForm.supplier || 'Proveedor',
+      carrier: newAsnForm.carrier || 'Transportista',
+      trackingNumber: newAsnForm.trackingNumber || `TRK-${id.slice(-6)}`,
+      status: 'in_transit',
+      shipDate,
+      expectedDate,
+      dockDoor: newAsnForm.dockDoor || undefined,
+      items: [],
+      notes: undefined,
+      actualDate: undefined
+    };
+    setAsns(prev => [...prev, newASN]);
+    setShowCreateModal(false);
+  };
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'in_transit': return 'bg-blue-100 text-blue-800';
@@ -216,7 +285,7 @@ export const ASNManagement: React.FC = () => {
           </button>
         </div>
         <button 
-          onClick={() => setShowCreateModal(true)}
+          onClick={openCreateModal}
           className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
         >
           <Plus className="w-4 h-4 mr-2" />
@@ -439,6 +508,110 @@ export const ASNManagement: React.FC = () => {
                   Completar Recepción
                 </button>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create ASN Modal */}
+      {showCreateModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-2xl shadow-lg rounded-md bg-white">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-medium text-gray-900">Nuevo ASN</h3>
+              <button
+                onClick={() => setShowCreateModal(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Orden de Compra (PO)</label>
+                <input
+                  type="text"
+                  value={newAsnForm.poNumber}
+                  onChange={(e) => setNewAsnForm({ ...newAsnForm, poNumber: e.target.value })}
+                  placeholder="PO-2024-001"
+                  className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Proveedor</label>
+                <input
+                  type="text"
+                  value={newAsnForm.supplier}
+                  onChange={(e) => setNewAsnForm({ ...newAsnForm, supplier: e.target.value })}
+                  placeholder="Proveedor ABC"
+                  className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Transportista</label>
+                <input
+                  type="text"
+                  value={newAsnForm.carrier}
+                  onChange={(e) => setNewAsnForm({ ...newAsnForm, carrier: e.target.value })}
+                  placeholder="Transportes Rápidos"
+                  className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Tracking</label>
+                <input
+                  type="text"
+                  value={newAsnForm.trackingNumber}
+                  onChange={(e) => setNewAsnForm({ ...newAsnForm, trackingNumber: e.target.value })}
+                  placeholder="TR123456789"
+                  className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Fecha de Envío</label>
+                <input
+                  type="date"
+                  value={newAsnForm.shipDate}
+                  onChange={(e) => setNewAsnForm({ ...newAsnForm, shipDate: e.target.value })}
+                  className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Fecha Esperada</label>
+                <input
+                  type="date"
+                  value={newAsnForm.expectedDate}
+                  onChange={(e) => setNewAsnForm({ ...newAsnForm, expectedDate: e.target.value })}
+                  className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700">Puerta (Dock)</label>
+                <input
+                  type="text"
+                  value={newAsnForm.dockDoor}
+                  onChange={(e) => setNewAsnForm({ ...newAsnForm, dockDoor: e.target.value })}
+                  placeholder="Puerta 1"
+                  className="mt-1 block w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end space-x-3">
+              <button
+                onClick={() => setShowCreateModal(false)}
+                className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleSaveNewASN}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
+              >
+                <Plus className="w-4 h-4 mr-2" />
+                Guardar ASN
+              </button>
             </div>
           </div>
         </div>

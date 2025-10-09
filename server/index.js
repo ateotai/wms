@@ -721,6 +721,35 @@ app.get('/purchase_orders/:id', authMiddleware, async (req, res) => {
   }
 });
 
+// -----------------------------------------------
+// Ventas: Obtener orden de venta por número (con items y datos de producto)
+// -----------------------------------------------
+app.get('/sales_orders/:orderNumber', authMiddleware, async (req, res) => {
+  try {
+    const { orderNumber } = req.params;
+    if (!orderNumber) return res.status(400).json({ error: 'orderNumber requerido' });
+
+    const { data: so, error: soErr } = await supabase
+      .from('sales_orders')
+      .select('id, so_number, customer_name, customer_email, customer_phone, warehouse_id, status, order_date, required_date, shipped_date, total_amount, shipping_amount, shipping_address, notes')
+      .eq('so_number', orderNumber)
+      .single();
+    if (soErr) return res.status(500).json({ error: soErr.message });
+    if (!so) return res.status(404).json({ error: 'Orden de venta no encontrada' });
+
+    const { data: items, error: itemsErr } = await supabase
+      .from('sales_order_items')
+      .select('id, product_id, quantity, unit_price, notes, products:product_id(sku, name, weight, dimensions)')
+      .eq('sales_order_id', so.id);
+    if (itemsErr) return res.status(500).json({ error: itemsErr.message });
+
+    return res.json({ sales_order: { ...so, items: items || [] } });
+  } catch (e) {
+    console.error('Error obteniendo orden de venta:', e);
+    return res.status(500).json({ error: 'Error interno obteniendo orden de venta' });
+  }
+});
+
 // Recepción de items de una orden de compra
 // Body: { items: [{ item_id, quantity, location_id?, lot_number?, unit_cost? }] }
 app.post('/purchase_orders/:id/receive', authMiddleware, async (req, res) => {

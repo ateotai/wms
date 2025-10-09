@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Truck, 
   MapPin, 
@@ -18,7 +18,8 @@ import {
   Edit,
   Trash2,
   Eye,
-  Settings
+  Settings,
+  User
 } from 'lucide-react';
 
 interface CarrierService {
@@ -65,9 +66,18 @@ export function CarrierManagement() {
   const [showCarrierModal, setShowCarrierModal] = useState(false);
   const [showNewCarrierModal, setShowNewCarrierModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'services' | 'performance'>('overview');
+  const [editCarrierId, setEditCarrierId] = useState<string | null>(null);
+  const [newCarrierForm, setNewCarrierForm] = useState({
+    name: '',
+    code: '',
+    contact: { phone: '', email: '', website: '', representative: '' },
+    averageCost: 0,
+    rating: 0,
+    status: 'active' as 'active' | 'inactive' | 'suspended'
+  });
 
   // Mock data
-  const carriers: Carrier[] = [
+  const defaultCarriers: Carrier[] = [
     {
       id: '1',
       name: 'DHL Express',
@@ -270,6 +280,37 @@ export function CarrierManagement() {
     }
   ];
 
+  const [carriers, setCarriers] = useState<Carrier[]>(defaultCarriers);
+
+  // Persistencia en localStorage
+  const CARRIERS_KEY = 'wms_carriers';
+  const loadCarriersFromStorage = (): Carrier[] => {
+    try {
+      const raw = localStorage.getItem(CARRIERS_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+  const saveCarriersToStorage = (list: Carrier[]) => {
+    try {
+      localStorage.setItem(CARRIERS_KEY, JSON.stringify(list));
+    } catch {}
+  };
+
+  useEffect(() => {
+    const saved = loadCarriersFromStorage();
+    if (saved.length) {
+      setCarriers(saved);
+    }
+  }, []);
+
+  useEffect(() => {
+    saveCarriersToStorage(carriers);
+  }, [carriers]);
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'active': return 'text-green-600 bg-green-100';
@@ -315,15 +356,89 @@ export function CarrierManagement() {
   };
 
   const handleEditCarrier = (carrierId: string) => {
-    console.log('Editando transportista:', carrierId);
+    const carrier = carriers.find(c => c.id === carrierId);
+    if (!carrier) return;
+    setEditCarrierId(carrierId);
+    setNewCarrierForm({
+      name: carrier.name,
+      code: carrier.code,
+      contact: { ...carrier.contact },
+      averageCost: carrier.averageCost,
+      rating: carrier.rating,
+      status: carrier.status
+    });
+    setShowNewCarrierModal(true);
   };
 
   const handleToggleCarrier = (carrierId: string) => {
-    console.log('Cambiando estado del transportista:', carrierId);
+    setCarriers(prev => prev.map(c =>
+      c.id === carrierId
+        ? { ...c, status: c.status === 'active' ? 'inactive' : 'active' }
+        : c
+    ));
   };
 
   const calculateEstimatedCost = (service: CarrierService, weight: number = 2.5) => {
     return service.baseRate + (service.ratePerKg * weight);
+  };
+
+  const openNewCarrierModal = () => {
+    setEditCarrierId(null);
+    setNewCarrierForm({
+      name: '',
+      code: '',
+      contact: { phone: '', email: '', website: '', representative: '' },
+      averageCost: 0,
+      rating: 0,
+      status: 'active'
+    });
+    setShowNewCarrierModal(true);
+  };
+
+  const handleSaveCarrier = () => {
+    if (!newCarrierForm.name || !newCarrierForm.code) {
+      alert('Nombre y código son obligatorios');
+      return;
+    }
+
+    if (editCarrierId) {
+      setCarriers(prev => prev.map(c =>
+        c.id === editCarrierId
+          ? {
+              ...c,
+              name: newCarrierForm.name,
+              code: newCarrierForm.code,
+              contact: { ...newCarrierForm.contact },
+              averageCost: newCarrierForm.averageCost,
+              rating: newCarrierForm.rating,
+              status: newCarrierForm.status
+            }
+          : c
+      ));
+    } else {
+      const newCarrier: Carrier = {
+        id: String(Date.now()),
+        name: newCarrierForm.name,
+        code: newCarrierForm.code,
+        contact: { ...newCarrierForm.contact },
+        services: [],
+        coverage: ['España'],
+        rating: newCarrierForm.rating || 0,
+        totalShipments: 0,
+        onTimeDelivery: 0,
+        averageCost: newCarrierForm.averageCost || 0,
+        contractStart: new Date().toISOString().slice(0, 10),
+        contractEnd: new Date().toISOString().slice(0, 10),
+        status: newCarrierForm.status,
+        apiIntegration: false,
+        trackingUrl: '',
+        notes: ''
+      };
+      setCarriers(prev => [...prev, newCarrier]);
+    }
+
+    setShowNewCarrierModal(false);
+    setEditCarrierId(null);
   };
 
   return (
@@ -338,7 +453,7 @@ export function CarrierManagement() {
         </div>
         <div className="flex items-center space-x-2">
           <button
-            onClick={() => setShowNewCarrierModal(true)}
+            onClick={openNewCarrierModal}
             className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
           >
             <Plus className="w-4 h-4 mr-2" />
@@ -720,6 +835,136 @@ export function CarrierManagement() {
               </button>
               <button className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700">
                 Editar Transportista
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New/Edit Carrier Modal */}
+      {showNewCarrierModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-2xl shadow-lg rounded-md bg-white">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">
+                {editCarrierId ? 'Editar Transportista' : 'Nuevo Transportista'}
+              </h3>
+              <button
+                onClick={() => { setShowNewCarrierModal(false); setEditCarrierId(null); }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1">Nombre</label>
+                  <input
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    value={newCarrierForm.name}
+                    onChange={(e) => setNewCarrierForm({ ...newCarrierForm, name: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1">Código</label>
+                  <input
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    value={newCarrierForm.code}
+                    onChange={(e) => setNewCarrierForm({ ...newCarrierForm, code: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1">Teléfono</label>
+                  <input
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    value={newCarrierForm.contact.phone}
+                    onChange={(e) => setNewCarrierForm({ ...newCarrierForm, contact: { ...newCarrierForm.contact, phone: e.target.value } })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1">Email</label>
+                  <input
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    value={newCarrierForm.contact.email}
+                    onChange={(e) => setNewCarrierForm({ ...newCarrierForm, contact: { ...newCarrierForm.contact, email: e.target.value } })}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1">Website</label>
+                  <input
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    value={newCarrierForm.contact.website}
+                    onChange={(e) => setNewCarrierForm({ ...newCarrierForm, contact: { ...newCarrierForm.contact, website: e.target.value } })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1">Representante</label>
+                  <input
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    value={newCarrierForm.contact.representative}
+                    onChange={(e) => setNewCarrierForm({ ...newCarrierForm, contact: { ...newCarrierForm.contact, representative: e.target.value } })}
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1">Costo Promedio (€)</label>
+                  <input
+                    type="number"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    value={newCarrierForm.averageCost}
+                    onChange={(e) => setNewCarrierForm({ ...newCarrierForm, averageCost: Number(e.target.value) })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1">Calificación (0-5)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="5"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    value={newCarrierForm.rating}
+                    onChange={(e) => setNewCarrierForm({ ...newCarrierForm, rating: Number(e.target.value) })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-700 mb-1">Estado</label>
+                  <select
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+                    value={newCarrierForm.status}
+                    onChange={(e) => setNewCarrierForm({ ...newCarrierForm, status: e.target.value as 'active' | 'inactive' | 'suspended' })}
+                  >
+                    <option value="active">Activo</option>
+                    <option value="inactive">Inactivo</option>
+                    <option value="suspended">Suspendido</option>
+                  </select>
+                </div>
+              </div>
+
+            </div>
+
+            <div className="mt-6 flex justify-end space-x-3">
+              <button
+                onClick={() => { setShowNewCarrierModal(false); setEditCarrierId(null); }}
+                className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleSaveCarrier}
+                className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
+              >
+                Guardar
               </button>
             </div>
           </div>

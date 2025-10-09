@@ -77,6 +77,8 @@ export function PickingDashboard() {
     }
   ];
 
+  const [showNewTaskModal, setShowNewTaskModal] = useState(false);
+
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -90,7 +92,7 @@ export function PickingDashboard() {
             <Download className="w-4 h-4 mr-2" />
             Exportar
           </button>
-          <button className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700">
+          <button onClick={() => setShowNewTaskModal(true)} className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700">
             <Plus className="w-4 h-4 mr-2" />
             Nueva Tarea
           </button>
@@ -241,6 +243,118 @@ export function PickingDashboard() {
           <RouterRoute path="/" element={<PickingTasks />} />
         </Routes>
       </div>
+
+      {/* New Picking Task Modal */}
+      {showNewTaskModal && (
+        <NewPickingTaskModal onClose={() => setShowNewTaskModal(false)} />
+      )}
     </div>
   );
+}
+
+function NewPickingTaskModal({ onClose }: { onClose: () => void }) {
+  const [customer, setCustomer] = useState('');
+  const [assignedTo, setAssignedTo] = useState('');
+  const [zone, setZone] = useState('Zona A - Picking');
+  const [priority, setPriority] = useState<'high' | 'medium' | 'low'>('medium');
+  const [location, setLocation] = useState('');
+  const [estimatedTime, setEstimatedTime] = useState(10);
+  const [notes, setNotes] = useState('');
+
+  const handleCreate = () => {
+    try {
+      const raw = localStorage.getItem('picking_tasks');
+      const tasks = raw ? JSON.parse(raw) : [];
+      const orderNumber = computeNextOrderNumber(tasks);
+      const dueDate = new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString();
+      const newTask = {
+        id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+        orderNumber,
+        customer: customer || 'Cliente',
+        priority,
+        status: 'pending',
+        assignedTo: assignedTo || 'Sin asignar',
+        zone,
+        location: location || '-',
+        items: [],
+        estimatedTime,
+        createdAt: new Date().toISOString(),
+        dueDate,
+        notes
+      };
+      const updated = [newTask, ...tasks];
+      localStorage.setItem('picking_tasks', JSON.stringify(updated));
+      window.dispatchEvent(new Event('picking_tasks_updated'));
+      onClose();
+    } catch (e) {
+      console.warn('No se pudo crear la tarea de picking', e);
+      onClose();
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+      <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-2xl shadow-lg rounded-md bg-white">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-medium text-gray-900">Nueva Tarea de Picking</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+            ✕
+          </button>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Cliente</label>
+            <input value={customer} onChange={e => setCustomer(e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-2" placeholder="Cliente" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Asignado a</label>
+            <input value={assignedTo} onChange={e => setAssignedTo(e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-2" placeholder="Operario" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Zona</label>
+            <input value={zone} onChange={e => setZone(e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-2" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Ubicación</label>
+            <input value={location} onChange={e => setLocation(e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-2" placeholder="A-01-01" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Prioridad</label>
+            <select value={priority} onChange={e => setPriority(e.target.value as any)} className="w-full border border-gray-300 rounded-md px-3 py-2">
+              <option value="high">Alta</option>
+              <option value="medium">Media</option>
+              <option value="low">Baja</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Tiempo Estimado (min)</label>
+            <input type="number" value={estimatedTime} onChange={e => setEstimatedTime(parseInt(e.target.value || '0'))} className="w-full border border-gray-300 rounded-md px-3 py-2" />
+          </div>
+        </div>
+        <div className="mt-4">
+          <label className="block text-sm font-medium text-gray-700 mb-1">Notas</label>
+          <textarea value={notes} onChange={e => setNotes(e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-2" rows={3} />
+        </div>
+        <div className="flex justify-end space-x-3 mt-6">
+          <button onClick={onClose} className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">Cancelar</button>
+          <button onClick={handleCreate} className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700">Crear Tarea</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function computeNextOrderNumber(tasks: any[]): string {
+  // Busca el máximo sufijo numérico en formato ORD-YYYY-XXX
+  let max = 0;
+  for (const t of tasks || []) {
+    const m = String(t?.orderNumber || '').match(/ORD-(\d{4})-(\d{3})/);
+    if (m) {
+      const num = parseInt(m[2], 10);
+      if (!isNaN(num)) max = Math.max(max, num);
+    }
+  }
+  const next = String(max + 1).padStart(3, '0');
+  const year = new Date().getFullYear();
+  return `ORD-${year}-${next}`;
 }

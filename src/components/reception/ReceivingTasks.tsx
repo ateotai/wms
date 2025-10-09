@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Package, 
   CheckCircle, 
@@ -52,9 +52,10 @@ export const ReceivingTasks: React.FC = () => {
   const [selectedTask, setSelectedTask] = useState<ReceivingTask | null>(null);
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showQualityModal, setShowQualityModal] = useState(false);
+  const [showNewTaskModal, setShowNewTaskModal] = useState(false);
 
-  // Mock data
-  const tasks: ReceivingTask[] = [
+  // Carga inicial desde localStorage o datos mock
+  const initialTasks: ReceivingTask[] = [
     {
       id: '1',
       taskNumber: 'RCV-2024-001',
@@ -164,6 +165,27 @@ export const ReceivingTasks: React.FC = () => {
     }
   ];
 
+  const [tasks, setTasks] = useState<ReceivingTask[]>(() => {
+    try {
+      const raw = localStorage.getItem('receiving_tasks');
+      if (raw) {
+        return JSON.parse(raw);
+      }
+    } catch (e) {
+      console.warn('No se pudo leer receiving_tasks de localStorage', e);
+    }
+    return initialTasks;
+  });
+
+  // Persistencia
+  useEffect(() => {
+    try {
+      localStorage.setItem('receiving_tasks', JSON.stringify(tasks));
+    } catch (e) {
+      console.warn('No se pudo guardar receiving_tasks en localStorage', e);
+    }
+  }, [tasks]);
+
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending': return 'bg-gray-100 text-gray-800';
@@ -223,13 +245,19 @@ export const ReceivingTasks: React.FC = () => {
   };
 
   const handleStartTask = (taskId: string) => {
-    console.log('Starting task:', taskId);
-    // Implement start task logic
+    setTasks(prev => prev.map(t => (
+      t.id === taskId
+        ? { ...t, status: 'in_progress', startTime: new Date().toISOString() }
+        : t
+    )));
   };
 
   const handleCompleteTask = (taskId: string) => {
-    console.log('Completing task:', taskId);
-    // Implement complete task logic
+    setTasks(prev => prev.map(t => (
+      t.id === taskId
+        ? { ...t, status: 'completed', completedTime: new Date().toISOString() }
+        : t
+    )));
   };
 
   const handleQualityCheck = (task: ReceivingTask) => {
@@ -261,7 +289,7 @@ export const ReceivingTasks: React.FC = () => {
             Filtros
           </button>
         </div>
-        <button className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+        <button onClick={() => setShowNewTaskModal(true)} className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
           <Plus className="w-4 h-4 mr-2" />
           Nueva Tarea
         </button>
@@ -509,6 +537,127 @@ export const ReceivingTasks: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* New Task Modal */}
+      {showNewTaskModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-2xl shadow-lg rounded-md bg-white">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-medium text-gray-900">Crear Nueva Tarea de Recepción</h3>
+              <button onClick={() => setShowNewTaskModal(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <NewTaskForm
+              onCancel={() => setShowNewTaskModal(false)}
+              onCreate={(newTask) => {
+                const nextNumber = computeNextTaskNumber(tasks);
+                const task: ReceivingTask = {
+                  id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+                  taskNumber: nextNumber,
+                  asnNumber: newTask.asnNumber || '-',
+                  poNumber: newTask.poNumber || '-',
+                  supplier: newTask.supplier || '-',
+                  assignedTo: newTask.assignedTo || '-',
+                  status: 'pending',
+                  priority: newTask.priority,
+                  dockDoor: newTask.dockDoor || '-',
+                  items: [],
+                  notes: newTask.notes || ''
+                };
+                setTasks(prev => [task, ...prev]);
+                setShowNewTaskModal(false);
+              }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
+// Formulario sencillo para crear tareas
+function NewTaskForm({ onCancel, onCreate }: { onCancel: () => void; onCreate: (data: {
+  asnNumber?: string;
+  poNumber?: string;
+  supplier?: string;
+  assignedTo?: string;
+  dockDoor?: string;
+  priority: 'low' | 'medium' | 'high' | 'urgent';
+  notes?: string;
+}) => void }) {
+  const [asnNumber, setAsnNumber] = useState('');
+  const [poNumber, setPoNumber] = useState('');
+  const [supplier, setSupplier] = useState('');
+  const [assignedTo, setAssignedTo] = useState('');
+  const [dockDoor, setDockDoor] = useState('');
+  const [priority, setPriority] = useState<'low' | 'medium' | 'high' | 'urgent'>('medium');
+  const [notes, setNotes] = useState('');
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">ASN</label>
+          <input value={asnNumber} onChange={e => setAsnNumber(e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-2" placeholder="ASN-2024-XXX" />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Orden de Compra</label>
+          <input value={poNumber} onChange={e => setPoNumber(e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-2" placeholder="PO-2024-XXX" />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Proveedor</label>
+          <input value={supplier} onChange={e => setSupplier(e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-2" placeholder="Proveedor" />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Asignado a</label>
+          <input value={assignedTo} onChange={e => setAssignedTo(e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-2" placeholder="Operario" />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Puerta</label>
+          <input value={dockDoor} onChange={e => setDockDoor(e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-2" placeholder="Puerta 1" />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Prioridad</label>
+          <select value={priority} onChange={e => setPriority(e.target.value as any)} className="w-full border border-gray-300 rounded-md px-3 py-2">
+            <option value="low">Baja</option>
+            <option value="medium">Media</option>
+            <option value="high">Alta</option>
+            <option value="urgent">Urgente</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">Notas</label>
+        <textarea value={notes} onChange={e => setNotes(e.target.value)} className="w-full border border-gray-300 rounded-md px-3 py-2" rows={3} placeholder="Notas opcionales" />
+      </div>
+      <div className="flex justify-end space-x-3">
+        <button onClick={onCancel} className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+        <button
+          onClick={() => onCreate({ asnNumber, poNumber, supplier, assignedTo, dockDoor, priority, notes })}
+          className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
+        >
+          Crear Tarea
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Genera el siguiente número de tarea basado en las existentes
+function computeNextTaskNumber(tasks: ReceivingTask[]): string {
+  const prefix = 'RCV-';
+  // Buscar máximo sufijo numérico
+  let max = 0;
+  for (const t of tasks) {
+    const match = t.taskNumber.match(/RCV-(\d{4})-(\d{3})/);
+    if (match) {
+      const num = parseInt(match[2], 10);
+      if (!isNaN(num)) max = Math.max(max, num);
+    }
+  }
+  const next = String(max + 1).padStart(3, '0');
+  const year = new Date().getFullYear();
+  return `${prefix}${year}-${next}`;
+}
