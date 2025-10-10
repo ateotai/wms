@@ -30,5 +30,5 @@ services:
         sync: false
       - key: VITE_SUPABASE_ANON_KEY
         sync: false
-      - key: VITE_BACKEND_URL
+      - key: VITE_AUTH_BACKEND_URL
         sync: false
