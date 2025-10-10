@@ -16,3 +16,16 @@ services:
         fromSecret: app_jwt_secret
       - key: CORS_ORIGINS
         fromSecret: cors_origins
+  - type: static_site
+    name: wms01-frontend
+    rootDir: .
+    buildCommand: npm install && npm run build
+    publishPath: dist
+    autoDeploy: true
+    envVars:
+      - key: VITE_SUPABASE_URL
+        fromSecret: vite_supabase_url
+      - key: VITE_SUPABASE_ANON_KEY
+        fromSecret: vite_supabase_anon_key
+      - key: VITE_AUTH_BACKEND_URL
+        fromSecret: vite_auth_backend_url
