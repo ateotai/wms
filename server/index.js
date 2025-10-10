@@ -10,6 +10,10 @@ const APP_PORT = process.env.PORT || 8080;
 const APP_JWT_SECRET = process.env.APP_JWT_SECRET || 'change_me_in_prod';
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || 'http://localhost:5173')
+  .split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error('Faltan variables SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY');
@@ -18,10 +22,10 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 const app = express();
-// CORS: permitir frontend en localhost:5173 y responder preflight (OPTIONS)
+// CORS: permitir orígenes configurables vía env (coma-separados) y responder preflight
 app.use(
   cors({
-    origin: ['http://localhost:5173'],
+    origin: CORS_ORIGINS,
     methods: ['GET', 'POST', 'PUT', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: false,
