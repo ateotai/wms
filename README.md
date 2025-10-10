@@ -91,6 +91,31 @@ Sigue estos pasos para publicar este proyecto en Vercel:
   - `APP_JWT_SECRET`
   - `CORS_ORIGINS` (opcional, coma-separado)
 
+### Configurar CORS_ORIGINS en Render
+
+Para permitir que el frontend en Render (o en local) llame al backend sin bloqueos CORS:
+
+- Dónde configurarlo: en el servicio backend de Render.
+  - Render → Services → wms01-backend → Settings → Environment → Add Environment Variable.
+  - Variable: `CORS_ORIGINS`
+  - Valor típico: `https://<tu-frontend>.onrender.com,http://localhost:5173`
+  - Ejemplo: `https://wms01-frontend-mpzh.onrender.com,http://localhost:5173`
+- Aplica cambios: guarda las variables y redeploy/restart del servicio.
+- Notas:
+  - El backend lee `CORS_ORIGINS` y habilita `GET/POST/PUT/OPTIONS` con las cabeceras CORS necesarias.
+  - Si no se define, por defecto permite `http://localhost:5173` (solo útil en desarrollo local).
+  - En blueprint (`render.yaml`) esta variable está declarada con `sync: false`, por lo que debe definirse en el panel de Render.
+
+Verificación rápida (preflight):
+
+```
+curl -I -X OPTIONS https://wms01-backend.onrender.com/login \
+  -H "Origin: https://wms01-frontend-mpzh.onrender.com" \
+  -H "Access-Control-Request-Method: POST"
+```
+
+Debe responder `200` con `access-control-allow-origin` igual al origen configurado.
+
 ### Blueprint con `render.yaml`
 
 Este repo incluye `render.yaml` en la raíz que define el servicio backend. En Render, usa “New → Blueprint” para importar el repositorio y crea los secrets `supabase_url`, `supabase_service_role_key`, `app_jwt_secret` y `cors_origins` referenciados por el blueprint.

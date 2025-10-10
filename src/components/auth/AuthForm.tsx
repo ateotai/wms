@@ -83,7 +83,7 @@ export function AuthForm({ mode, onToggle }: AuthFormProps) {
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
             <h3 className="text-sm font-medium text-blue-800 mb-2">Usuarios de prueba:</h3>
             <div className="text-xs text-blue-700 space-y-1">
-              <div><strong>Admin:</strong> admin@wms.com / Admin123!</div>
+              <div><strong>Admin:</strong> admin@demo.local / admin123</div>
               <div><strong>Manager:</strong> manager@wms.com / Manager123!</div>
               <div><strong>Operador:</strong> operator@wms.com / Operator123!</div>
             </div>
