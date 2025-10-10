@@ -31,6 +31,19 @@ app.use(
 app.options('*', cors());
 app.use(express.json());
 
+app.get('/', (_req, res) => {
+  res.status(200).send('Auth backend running');
+});
+
+app.get('/health', (_req, res) => {
+  res.status(200).json({
+    ok: true,
+    uptime: process.uptime(),
+    port: APP_PORT,
+    timestamp: new Date().toISOString(),
+  });
+});
+
 function signToken(user) {
   const payload = { sub: user.id, email: user.email, role: user.role };
   return jwt.sign(payload, APP_JWT_SECRET, { expiresIn: '12h' });
