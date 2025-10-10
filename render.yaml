@@ -18,7 +18,7 @@ services:
   - type: web
     name: wms01-frontend
     runtime: static
-    rootDir: wms2
+    rootDir: .
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
     routes:
