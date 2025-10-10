@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: wms01-backend
+    env: node
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    autoDeploy: true
+    healthCheckPath: /health
+    envVars:
+      - key: SUPABASE_URL
+        fromSecret: supabase_url
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        fromSecret: supabase_service_role_key
+      - key: APP_JWT_SECRET
+        fromSecret: app_jwt_secret
+      - key: CORS_ORIGINS
+        fromSecret: cors_origins

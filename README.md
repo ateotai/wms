@@ -77,3 +77,26 @@ Sigue estos pasos para publicar este proyecto en Vercel:
 - Notas:
   - Este repo incluye una carpeta `server/` para desarrollo local; en Vercel se despliega el frontend (Vite). Si necesitas backend, úsalo como funciones serverless o despliega el servidor por separado.
   - Antes de publicar, asegúrate que `npm run build` finaliza correctamente en local.
+
+## Despliegue en Render (Backend Node)
+
+- Tipo de servicio: `web`
+- Root Directory: `server`
+- Build Command: `npm install` (el backend no tiene `build`)
+- Start Command: `npm start` (ejecuta `node index.js`)
+- Health Check: `GET /health`
+- Variables de entorno requeridas:
+  - `SUPABASE_URL`
+  - `SUPABASE_SERVICE_ROLE_KEY`
+  - `APP_JWT_SECRET`
+  - `CORS_ORIGINS` (opcional, coma-separado)
+
+### Blueprint con `render.yaml`
+
+Este repo incluye `render.yaml` en la raíz que define el servicio backend. En Render, usa “New → Blueprint” para importar el repositorio y crea los secrets `supabase_url`, `supabase_service_role_key`, `app_jwt_secret` y `cors_origins` referenciados por el blueprint.
+
+### Verificación post-deploy
+
+- `GET /` debe responder `Auth backend running`.
+- `GET /health` debe devolver un JSON con `status`, `uptime`, `port` y `timestamp`.
+- Configura el frontend con `VITE_AUTH_BACKEND_URL` apuntando al dominio de Render.
