@@ -1,24 +1,17 @@
-import React, { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { 
   FileText, 
   Package, 
-  Truck, 
-  Calendar, 
   MapPin, 
   User, 
   Phone, 
   Mail,
   Eye,
-  Edit,
   CheckCircle,
-  Clock,
-  AlertTriangle,
   Plus,
-  Filter,
-  Search,
-  Download,
   X
 } from 'lucide-react';
+import { useAuth } from '../../contexts/AuthContext';
 
 interface ShippingOrderItem {
   id: string;
@@ -58,9 +51,17 @@ interface ShippingOrder {
   shippedAt?: string;
   deliveredAt?: string;
   notes?: string;
+  packingId?: string;
+  packingModel?: 'consolidation' | 'wave' | 'pack_to_light';
+  packingWaveId?: string | null;
+  packingStation?: string | null;
+  packingOperator?: string | null;
+  packingStatus?: 'pending' | 'in_process' | 'completed';
 }
 
-export function ShippingOrders() {
+export function ShippingOrders({ openNewPackage }: { openNewPackage?: () => void }) {
+  const { token } = useAuth();
+  const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
   const [selectedOrder, setSelectedOrder] = useState<ShippingOrder | null>(null);
   const [showOrderModal, setShowOrderModal] = useState(false);
   const [showNewOrderModal, setShowNewOrderModal] = useState(false);
@@ -78,7 +79,12 @@ export function ShippingOrders() {
     shippingMethod: '',
     estimatedDelivery: '',
     totalValue: 0,
-    notes: ''
+    notes: '',
+    packingModel: 'consolidation' as 'consolidation' | 'wave' | 'pack_to_light',
+    packingWaveId: '',
+    packingStation: 'E-01',
+    packingOperator: '',
+    packingStatus: 'pending' as 'pending' | 'in_process' | 'completed'
   });
   const [newItems, setNewItems] = useState<ShippingOrderItem[]>([
     { id: 'tmp-1', product: '', sku: '', quantity: 1, weight: 0, dimensions: '', packed: false }
@@ -95,6 +101,18 @@ export function ShippingOrders() {
       return [] as ShippingOrder[];
     }
   });
+
+  useEffect(() => {
+    const handler = (e: any) => {
+      const items = Array.isArray(e?.detail?.items) ? e.detail.items : [];
+      if (items.length > 0) {
+        setNewItems(items.map((it: any, idx: number) => ({ id: it.id || `sel-${idx}`, product: String(it.product || ''), sku: String(it.sku || ''), quantity: Number(it.quantity || 1), weight: Number(it.weight || 0), dimensions: String(it.dimensions || ''), packed: false })));
+        setShowNewOrderModal(true);
+      }
+    };
+    window.addEventListener('openPackingNewOrder', handler as any);
+    return () => window.removeEventListener('openPackingNewOrder', handler as any);
+  }, []);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -165,7 +183,7 @@ export function ShippingOrders() {
     setNewItems((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const updateItem = (index: number, field: keyof ShippingOrderItem, value: any) => {
+  const updateItem = (index: number, field: keyof ShippingOrderItem, value: string | number | boolean) => {
     setNewItems((prev) => {
       const list = [...prev];
       list[index] = { ...list[index], [field]: field === 'quantity' || field === 'weight' ? Number(value) : value } as ShippingOrderItem;
@@ -183,6 +201,16 @@ export function ShippingOrders() {
     return `ORD-${year}-${String(next).padStart(3, '0')}`;
   };
 
+  const getNextPackingId = () => {
+    const year = new Date().getFullYear();
+    const nums = orders.map((o) => {
+      const m = (o.packingId || '').match(/PKG-(\d{4})-(\d+)/);
+      return m ? parseInt(m[2], 10) : 0;
+    });
+    const next = (nums.length ? Math.max(...nums) + 1 : 1);
+    return `PKG-${year}-${String(next).padStart(3, '0')}`;
+  };
+
   const handleCreateNewOrder = () => {
     // Validaciones mínimas
     if (!newOrderForm.name.trim()) { alert('Ingresa el nombre del cliente'); return; }
@@ -194,9 +222,11 @@ export function ShippingOrders() {
     if (validItems.length === 0) { alert('Agrega al menos un producto con cantidad'); return; }
 
     const totalWeight = validItems.reduce((sum, it) => sum + (Number(it.weight) || 0) * (Number(it.quantity) || 0), 0);
+    const packingId = getNextPackingId();
+    const previewOrderNumber = getNextOrderNumber();
     const newOrder: ShippingOrder = {
       id: String(Date.now()),
-      orderNumber: getNextOrderNumber(),
+      orderNumber: previewOrderNumber,
       customer: { name: newOrderForm.name, email: newOrderForm.email, phone: newOrderForm.phone },
       shippingAddress: {
         street: newOrderForm.street,
@@ -214,23 +244,40 @@ export function ShippingOrders() {
       totalWeight,
       totalValue: Number(newOrderForm.totalValue) || 0,
       createdAt: new Date().toISOString(),
-      notes: newOrderForm.notes || undefined
+      notes: newOrderForm.notes || undefined,
+      packingId: packingId,
+      packingModel: newOrderForm.packingModel,
+      packingWaveId: (newOrderForm.packingModel === 'wave' ? (newOrderForm.packingWaveId || null) : null),
+      packingStation: newOrderForm.packingStation || null,
+      packingOperator: newOrderForm.packingOperator || null,
+      packingStatus: newOrderForm.packingStatus
     };
 
-    setOrders((prev) => [...prev, newOrder]);
-    // Persistir en localStorage para métricas reales del dashboard
-    try {
-      const existingStr = localStorage.getItem('packing_orders');
-      const existing: ShippingOrder[] = existingStr ? JSON.parse(existingStr) : [];
-      localStorage.setItem('packing_orders', JSON.stringify([...existing, newOrder]));
-    } catch (e) {
-      console.warn('No se pudo guardar packing_orders en localStorage:', e);
-    }
+    const persist = async () => {
+      try {
+        if (AUTH_BACKEND_URL) {
+          const resp = await fetch(`${AUTH_BACKEND_URL}/packing/orders`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+            body: JSON.stringify(newOrder),
+          });
+          if (!resp.ok) throw new Error('No se pudo guardar en backend');
+        }
+      } catch {
+        try {
+          const existingStr = localStorage.getItem('packing_orders');
+          const existing: ShippingOrder[] = existingStr ? JSON.parse(existingStr) : [];
+          localStorage.setItem('packing_orders', JSON.stringify([...existing, newOrder]));
+        } catch {}
+      }
+      setOrders((prev) => [...prev, newOrder]);
+    };
+    persist();
     setShowNewOrderModal(false);
-    // Reset
     setNewOrderForm({
       name: '', email: '', phone: '', street: '', city: '', state: '', zipCode: '', country: '',
-      carrier: '', priority: 'medium', shippingMethod: '', estimatedDelivery: '', totalValue: 0, notes: ''
+      carrier: '', priority: 'medium', shippingMethod: '', estimatedDelivery: '', totalValue: 0, notes: '',
+      packingModel: 'consolidation', packingWaveId: '', packingStation: 'E-01', packingOperator: '', packingStatus: 'pending'
     });
     setNewItems([{ id: 'tmp-1', product: '', sku: '', quantity: 1, weight: 0, dimensions: '', packed: false }]);
   };
@@ -246,13 +293,15 @@ export function ShippingOrders() {
           </span>
         </div>
         <div className="flex items-center space-x-2">
-          <button
-            onClick={() => setShowNewOrderModal(true)}
-            className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
-          >
-            <Plus className="w-4 h-4 mr-2" />
-            Nueva Orden
-          </button>
+          {openNewPackage && (
+            <button
+              onClick={() => openNewPackage()}
+              className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              Nuevo Paquete
+            </button>
+          )}
         </div>
       </div>
 
@@ -532,11 +581,58 @@ export function ShippingOrders() {
       {showNewOrderModal && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-3xl shadow-lg rounded-md bg-white">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900">Nueva Orden de Envío</h3>
-              <button onClick={() => setShowNewOrderModal(false)} className="text-gray-400 hover:text-gray-600" title="Cerrar">
-                <X className="w-6 h-6" />
-              </button>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-gray-900">Nueva Orden de Envío</h3>
+            <button onClick={() => setShowNewOrderModal(false)} className="text-gray-400 hover:text-gray-600" title="Cerrar">
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+              <h4 className="text-sm font-semibold text-blue-800 mb-2">Datos Generales del Empaque</h4>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">ID Empaque</label>
+                  <input type="text" value={getNextPackingId()} readOnly className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-100" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Modelo de empaquetamiento</label>
+                  <select value={newOrderForm.packingModel} onChange={(e) => setNewOrderForm({ ...newOrderForm, packingModel: e.target.value as 'consolidation' | 'wave' | 'pack_to_light' })}
+                    className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md">
+                    <option value="consolidation">Consolidación</option>
+                    <option value="wave">Ola</option>
+                    <option value="pack_to_light">Pack-to-Light</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Ola asociada (si aplica)</label>
+                  <input type="text" value={newOrderForm.packingWaveId} onChange={(e) => setNewOrderForm({ ...newOrderForm, packingWaveId: e.target.value })}
+                    className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Pedido actual</label>
+                  <input type="text" value={getNextOrderNumber()} readOnly className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md bg-gray-100" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Estación de empaque</label>
+                  <input type="text" value={newOrderForm.packingStation} onChange={(e) => setNewOrderForm({ ...newOrderForm, packingStation: e.target.value })}
+                    className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Operario</label>
+                  <input type="text" value={newOrderForm.packingOperator} onChange={(e) => setNewOrderForm({ ...newOrderForm, packingOperator: e.target.value })}
+                    className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700">Estado</label>
+                  <select value={newOrderForm.packingStatus} onChange={(e) => setNewOrderForm({ ...newOrderForm, packingStatus: e.target.value as 'pending' | 'in_process' | 'completed' })}
+                    className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md">
+                    <option value="pending">Pendiente</option>
+                    <option value="in_process">En proceso</option>
+                    <option value="completed">Completado</option>
+                  </select>
+                </div>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">

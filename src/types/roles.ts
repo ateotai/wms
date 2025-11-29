@@ -29,7 +29,8 @@ export enum Resource {
   TRANSFERS = 'transfers',
   REPORTS = 'reports',
   SETTINGS = 'settings',
-  CYCLE_COUNTS = 'cycle_counts'
+  CYCLE_COUNTS = 'cycle_counts',
+  PUTAWAY = 'putaway'
 }
 
 /**
@@ -186,7 +187,12 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     { resource: Resource.TRANSFERS, action: Action.DELETE, allowed: true },
     // Reportes y configuración
     { resource: Resource.REPORTS, action: Action.READ, allowed: true },
-    { resource: Resource.SETTINGS, action: Action.UPDATE, allowed: true }
+    { resource: Resource.SETTINGS, action: Action.UPDATE, allowed: true },
+    // Putaway (acomodo)
+    { resource: Resource.PUTAWAY, action: Action.CREATE, allowed: true },
+    { resource: Resource.PUTAWAY, action: Action.READ, allowed: true },
+    { resource: Resource.PUTAWAY, action: Action.UPDATE, allowed: true },
+    { resource: Resource.PUTAWAY, action: Action.DELETE, allowed: true }
   ],
 
   [UserRole.MANAGER]: [
@@ -215,7 +221,10 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     { resource: Resource.TRANSFERS, action: Action.READ, allowed: true },
     { resource: Resource.TRANSFERS, action: Action.UPDATE, allowed: true },
     // Reportes
-    { resource: Resource.REPORTS, action: Action.READ, allowed: true }
+    { resource: Resource.REPORTS, action: Action.READ, allowed: true },
+    // Putaway (acomodo)
+    { resource: Resource.PUTAWAY, action: Action.READ, allowed: true },
+    { resource: Resource.PUTAWAY, action: Action.UPDATE, allowed: true }
   ],
 
   [UserRole.OPERATOR]: [
@@ -236,7 +245,10 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     // Conteos cíclicos
     { resource: Resource.CYCLE_COUNTS, action: Action.CREATE, allowed: true },
     { resource: Resource.CYCLE_COUNTS, action: Action.READ, allowed: true },
-    { resource: Resource.CYCLE_COUNTS, action: Action.UPDATE, allowed: true }
+    { resource: Resource.CYCLE_COUNTS, action: Action.UPDATE, allowed: true },
+    // Putaway (acomodo)
+    { resource: Resource.PUTAWAY, action: Action.READ, allowed: true },
+    { resource: Resource.PUTAWAY, action: Action.UPDATE, allowed: true }
   ],
 
   [UserRole.VIEWER]: [
@@ -246,7 +258,9 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     { resource: Resource.PURCHASE_ORDERS, action: Action.READ, allowed: true },
     { resource: Resource.SALES_ORDERS, action: Action.READ, allowed: true },
     { resource: Resource.TRANSFERS, action: Action.READ, allowed: true },
-    { resource: Resource.REPORTS, action: Action.READ, allowed: true }
+    { resource: Resource.REPORTS, action: Action.READ, allowed: true },
+    // Putaway (acomodo)
+    { resource: Resource.PUTAWAY, action: Action.READ, allowed: true }
   ]
 };
 

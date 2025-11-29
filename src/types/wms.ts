@@ -381,8 +381,8 @@ export interface APILog {
   integration_id: string;
   endpoint: string;
   method: 'GET' | 'POST' | 'PUT' | 'DELETE';
-  request_data?: any;
-  response_data?: any;
+  request_data?: unknown;
+  response_data?: unknown;
   status_code: number;
   execution_time: number;
   created_at: string;
@@ -398,7 +398,7 @@ export interface DashboardWidget {
   type: 'chart' | 'metric' | 'table' | 'map';
   size: 'small' | 'medium' | 'large';
   position: { x: number; y: number };
-  config: any;
+  config: Record<string, unknown>;
   user_role: UserRole[];
 }
 

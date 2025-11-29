@@ -19,7 +19,11 @@ import {
   PackageX,
   TrendingUp,
   Globe,
-  Shield
+  Activity,
+  Calendar,
+  ClipboardList,
+  Database,
+  AlertTriangle
 } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -44,6 +48,7 @@ export function Sidebar() {
       icon: Package,
       children: [
         { name: 'Dashboard Inventario', href: '/inventory', icon: Package, permissionId: 'inventory.view' },
+        { name: 'Catálogo de Productos', href: '/inventory/products', icon: Package, permissionId: 'inventory.view' },
         { name: 'Entradas de Mercancía', href: '/inventory/inbound', icon: PackageCheck, permissionId: 'inventory.view' },
         { name: 'Salidas de Mercancía', href: '/inventory/outbound', icon: PackageX, permissionId: 'inventory.view' },
         { name: 'Movimientos Internos', href: '/inventory/movements', icon: RotateCcw, permissionId: 'inventory.view' },
@@ -55,26 +60,43 @@ export function Sidebar() {
       name: 'Layout de Almacén',
       icon: Warehouse,
       children: [
-        { name: 'Mapa Digital', href: '/warehouse/map', icon: MapPin, permissionId: 'warehouse.view' },
-        { name: 'Configurar Zonas', href: '/warehouse/zones', icon: Warehouse, permissionId: 'warehouse.view' },
         { name: 'Almacenes', href: '/warehouse/warehouses', icon: Warehouse, permissionId: 'warehouse.view' },
+        { name: 'Zonas', href: '/warehouse/zones', icon: Settings, permissionId: 'warehouse.view' },
+        { name: 'Pasillos', href: '/warehouse/aisles', icon: RotateCcw, permissionId: 'warehouse.view' },
+        { name: 'Rack', href: '/warehouse/racks', icon: Package, permissionId: 'warehouse.view' },
         { name: 'Ubicaciones', href: '/warehouse/locations', icon: MapPin, permissionId: 'warehouse.view' },
-        { name: 'Reglas de Slotting', href: '/warehouse/slotting', icon: Settings, permissionId: 'warehouse.view' }
+        { name: 'Mapa Digital', href: '/warehouse/map', icon: MapPin, permissionId: 'warehouse.view' },
+        
       ]
     },
     {
       name: 'Recepción',
-      href: '/reception',
       icon: Truck,
-      permissionId: 'reception.view'
+      children: [
+        { name: 'Dashboard Recepción', href: '/reception', icon: Truck, permissionId: 'reception.view' },
+        { name: 'Órdenes de Compra', href: '/reception/orders', icon: FileText, permissionId: 'reception.view' },
+        { name: 'Citas', href: '/reception/appointments', icon: Calendar, permissionId: 'reception.view' },
+        { name: 'Control de Recepción', href: '/reception/control', icon: Package, permissionId: 'reception.view' },
+        { name: 'Tareas de Recepción', href: '/reception/receiving', icon: Package, permissionId: 'reception.view' },
+        { name: 'ASN', href: '/reception/asn', icon: Truck, permissionId: 'reception.view' }
+      ]
+    },
+    {
+      name: 'Putaway',
+      icon: Package,
+      children: [
+        { name: 'Acomodo', href: '/putaway', icon: Package, permissionId: 'putaway.view' },
+        { name: 'Tareas de Acomodo', href: '/putaway/tasks', icon: ClipboardList, permissionId: 'putaway.view' }
+      ]
     },
     {
       name: 'Picking',
       icon: ShoppingCart,
       children: [
+        { name: 'Doc Salidas', href: '/picking/outgoing', icon: Package, permissionId: 'picking.view' },
         { name: 'Tareas de Picking', href: '/picking/tasks', icon: ShoppingCart, permissionId: 'picking.view' },
-        { name: 'Picking por Lotes', href: '/picking/batch', icon: Package, permissionId: 'picking.view' },
-        { name: 'Picking por Olas', href: '/picking/waves', icon: TrendingUp, permissionId: 'picking.view' },
+        { name: 'Ola por SKU', href: '/picking/batches', icon: Package, permissionId: 'picking.view' },
+        { name: 'Olas por pedidos', href: '/picking/waves', icon: TrendingUp, permissionId: 'picking.view' },
         { name: 'Optimización Rutas', href: '/picking/routes', icon: MapPin, permissionId: 'picking.view' }
       ]
     },
@@ -82,12 +104,12 @@ export function Sidebar() {
       name: 'Packing y Envíos',
       icon: PackageCheck,
       children: [
-        { name: 'Preparación Pedidos', href: '/packing/orders', icon: Package, permissionId: 'packing.view' },
-        { name: 'Etiquetado', href: '/packing/labeling', icon: FileText, permissionId: 'packing.view' },
-        { name: 'Gestión Transporte', href: '/packing/transport', icon: Truck, permissionId: 'packing.view' },
-        { name: 'Documentos Envío', href: '/packing/documents', icon: FileText, permissionId: 'packing.view' }
+        { name: 'Preparación de Paquetes', href: '/packing/orders', icon: Package, permissionId: 'packing.view' },
+        { name: 'Empaquetado', href: '/packing/tasks', icon: Package, permissionId: 'packing.view' },
+        { name: 'Etiquetar', href: '/packing/labeling', icon: FileText, permissionId: 'packing.view' }
       ]
     },
+    { name: 'Incidencias', href: '/incidencias', icon: AlertTriangle, permissionId: 'picking.view' },
     {
       name: 'Reposición Automática',
       icon: RotateCcw,
@@ -110,11 +132,12 @@ export function Sidebar() {
     },
     { name: 'Usuarios', href: '/users', icon: Users, permissionId: 'users.view' },
     {
-      name: 'Configuración',
+      name: 'Generales',
       icon: Settings,
       children: [
-        { name: 'Multi-empresa', href: '/config/companies', icon: Globe, permissionId: 'settings.view' },
-        { name: 'Roles y Permisos', href: '/config/permissions', icon: Shield, permissionId: 'settings.view' },
+        { name: 'Configuración General', href: '/config/general', icon: Settings, permissionId: 'settings.view' },
+        { name: 'Supabase', href: '/config/supabase', icon: Database, permissionId: 'settings.view' },
+        { name: 'Log de Actividad', href: '/config/logs', icon: Activity, permissionId: 'settings.view' },
         { name: 'Dispositivos Móviles', href: '/config/devices', icon: Settings, permissionId: 'settings.view' },
         { name: 'Etiquetas y Medidas', href: '/config/labels', icon: FileText, permissionId: 'settings.view' }
       ]

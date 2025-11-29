@@ -1,24 +1,19 @@
 import React, { useState } from 'react';
+import { formatCurrency } from '../../utils/currency';
 import { 
   Activity, 
   Clock, 
-  Users, 
   Package, 
   Truck, 
   Target,
   TrendingUp,
-  TrendingDown,
-  BarChart3,
   Download,
   RefreshCw,
   Filter,
   Search,
-  Eye,
   ArrowUp,
   ArrowDown,
-  Minus,
-  CheckCircle,
-  AlertCircle
+  Minus
 } from 'lucide-react';
 
 export function OperationalReports() {
@@ -212,12 +207,7 @@ export function OperationalReports() {
     return 'text-gray-600';
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('es-ES', {
-      style: 'currency',
-      currency: 'EUR'
-    }).format(amount);
-  };
+  // Usar utilidad global para formateo de moneda
 
   return (
     <div className="space-y-6">

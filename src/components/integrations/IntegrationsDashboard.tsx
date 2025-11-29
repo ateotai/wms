@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Routes, Route, Link, useLocation } from 'react-router-dom';
+import { Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { 
   Database, 
   ShoppingCart, 
@@ -19,55 +19,176 @@ import {
 } from 'lucide-react';
 
 import { ERPConnectors } from './ERPConnectors';
+import { supabase } from '../../lib/supabase';
 
 export function IntegrationsDashboard() {
   const [searchTerm, setSearchTerm] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const location = useLocation();
+  const navigate = useNavigate();
 
   const tabs = [
     { name: 'Conectores ERP', href: '/integrations/erp', icon: Database }
   ];
 
+  // KPI: datos reales
+  type StatCard = {
+    title: string;
+    value: string;
+    change: string;
+    changeType: 'increase' | 'decrease';
+    icon: any;
+    color: 'blue' | 'green' | 'purple' | 'orange';
+  };
+  const [stats, setStats] = useState<StatCard[]>([
+    { title: 'Integraciones Activas', value: '—', change: '—', changeType: 'increase', icon: CheckCircle, color: 'green' },
+    { title: 'Sincronizaciones Hoy', value: '—', change: '—', changeType: 'increase', icon: RefreshCw, color: 'blue' },
+    { title: 'APIs Disponibles', value: '—', change: '—', changeType: 'increase', icon: Zap, color: 'purple' },
+    { title: 'Tiempo Respuesta', value: '—', change: '—', changeType: 'decrease', icon: Clock, color: 'orange' },
+  ]);
+
+  function formatMs(ms: number | null) {
+    if (ms == null || ms <= 0) return '—';
+    if (ms < 1000) return `${Math.round(ms)}ms`;
+    return `${(ms / 1000).toFixed(2)}s`;
+  }
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const loadStats = async () => {
+      try {
+        const now = new Date();
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const startOfThisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const endOfPrevMonth = new Date(now.getFullYear(), now.getMonth(), 0);
+
+        // Conectores (fallback si la tabla no existe)
+        let connectors: any[] = [];
+        try {
+          const { data, error } = await supabase
+            .from('erp_connectors')
+            .select('id,status,is_active,type,created_at,updated_at');
+          if (error) throw error;
+          connectors = data || [];
+        } catch (e) {
+          connectors = [];
+        }
+
+        const activeConnectors = (connectors || []).filter((c: any) => c?.status === 'active' || c?.is_active === true);
+        const activeCount = activeConnectors.length;
+        const apisCount = new Set((connectors || []).map((c: any) => String(c?.type || '').trim()).filter(Boolean)).size;
+        const prevMonthActives = (connectors || []).filter((c: any) => {
+          const up = c?.updated_at ? new Date(c.updated_at) : null;
+          return (c?.status === 'active' || c?.is_active === true) && up && up >= startOfPrevMonth && up < startOfThisMonth;
+        }).length;
+        const apisPrevCount = new Set(
+          (connectors || [])
+            .filter((c: any) => c?.created_at && new Date(c.created_at) >= startOfPrevMonth && new Date(c.created_at) < startOfThisMonth)
+            .map((c: any) => String(c?.type || '').trim())
+            .filter(Boolean)
+        ).size;
+
+        // Logs de sincronización (fallback si la tabla no existe)
+        let todayLogs: any[] = [];
+        try {
+          const { data, error } = await supabase
+            .from('erp_sync_logs')
+            .select('id,duration_seconds,started_at,completed_at,ended_at,created_at')
+            .gte('started_at', startOfToday.toISOString());
+          if (error) throw error;
+          todayLogs = data || [];
+        } catch (e) {
+          todayLogs = [];
+        }
+        const todaySyncs = (todayLogs || []).length;
+        const todayDurations = (todayLogs || []).map((r: any) => {
+          if (r?.duration_seconds) return Number(r.duration_seconds) * 1000;
+          const startTs = r?.started_at || r?.created_at;
+          const endTs = r?.completed_at || r?.ended_at;
+          if (startTs && endTs) return Math.max(0, new Date(endTs).getTime() - new Date(startTs).getTime());
+          return 0;
+        }).filter((x: number) => x > 0);
+        const avgTodayMs = todayDurations.length ? Math.round(todayDurations.reduce((a: number, b: number) => a + b, 0) / todayDurations.length) : null;
+
+        let prevMonthLogs: any[] = [];
+        try {
+          const { data, error } = await supabase
+            .from('erp_sync_logs')
+            .select('id,duration_seconds,started_at,completed_at,ended_at,created_at')
+            .gte('started_at', startOfPrevMonth.toISOString())
+            .lt('started_at', startOfThisMonth.toISOString());
+          if (error) throw error;
+          prevMonthLogs = data || [];
+        } catch (e) {
+          prevMonthLogs = [];
+        }
+        const prevDays = endOfPrevMonth.getDate() || 1;
+        const prevMonthDailyAvg = (prevMonthLogs || []).length / prevDays;
+        const prevDurations = (prevMonthLogs || []).map((r: any) => {
+          if (r?.duration_seconds) return Number(r.duration_seconds) * 1000;
+          const startTs = r?.started_at || r?.created_at;
+          const endTs = r?.completed_at || r?.ended_at;
+          if (startTs && endTs) return Math.max(0, new Date(endTs).getTime() - new Date(startTs).getTime());
+          return 0;
+        }).filter((x: number) => x > 0);
+        const avgPrevMs = prevDurations.length ? Math.round(prevDurations.reduce((a: number, b: number) => a + b, 0) / prevDurations.length) : null;
+
+        // Construir tarjetas
+        const activeDelta = prevMonthActives ? activeCount - prevMonthActives : null;
+        const apisDelta = apisPrevCount ? apisCount - apisPrevCount : null;
+        const syncPct = prevMonthDailyAvg ? Math.round(((todaySyncs - prevMonthDailyAvg) / prevMonthDailyAvg) * 100) : null;
+        const respDeltaMs = (avgTodayMs != null && avgPrevMs != null) ? (avgTodayMs - avgPrevMs) : null;
+
+        const newStats: StatCard[] = [
+          {
+            title: 'Integraciones Activas',
+            value: String(activeCount),
+            change: activeDelta == null ? '—' : `${activeDelta >= 0 ? '+' : ''}${activeDelta}`,
+            changeType: activeDelta == null ? 'increase' : (activeDelta >= 0 ? 'increase' : 'decrease'),
+            icon: CheckCircle,
+            color: 'green'
+          },
+          {
+            title: 'Sincronizaciones Hoy',
+            value: todaySyncs.toLocaleString('es-ES'),
+            change: syncPct == null ? '—' : `${syncPct >= 0 ? '+' : ''}${syncPct}%`,
+            changeType: syncPct == null ? 'increase' : (syncPct >= 0 ? 'increase' : 'decrease'),
+            icon: RefreshCw,
+            color: 'blue'
+          },
+          {
+            title: 'APIs Disponibles',
+            value: String(apisCount),
+            change: apisDelta == null ? '—' : `${apisDelta >= 0 ? '+' : ''}${apisDelta}`,
+            changeType: apisDelta == null ? 'increase' : (apisDelta >= 0 ? 'increase' : 'decrease'),
+            icon: Zap,
+            color: 'purple'
+          },
+          {
+            title: 'Tiempo Respuesta',
+            value: formatMs(avgTodayMs),
+            change: respDeltaMs == null ? '—' : `${respDeltaMs >= 0 ? '+' : ''}${respDeltaMs}ms`,
+            changeType: respDeltaMs == null ? 'decrease' : (avgTodayMs != null && avgPrevMs != null && avgTodayMs <= avgPrevMs ? 'decrease' : 'increase'),
+            icon: Clock,
+            color: 'orange'
+          },
+        ];
+
+        if (!cancelled) setStats(newStats);
+      } catch (e) {
+        // En caso de error inesperado, mantener valores por defecto sin romper la UI
+        console.error('Error cargando métricas de integraciones:', e);
+      }
+    };
+    loadStats();
+    return () => { cancelled = true; };
+  }, []);
   const isActiveTab = (href: string) => {
     return location.pathname.startsWith(href);
   };
 
-  // Mock stats data
-  const stats = [
-    {
-      title: 'Integraciones Activas',
-      value: '12',
-      change: '+2',
-      changeType: 'increase' as const,
-      icon: CheckCircle,
-      color: 'green'
-    },
-    {
-      title: 'Sincronizaciones Hoy',
-      value: '1,247',
-      change: '+18%',
-      changeType: 'increase' as const,
-      icon: RefreshCw,
-      color: 'blue'
-    },
-    {
-      title: 'APIs Disponibles',
-      value: '8',
-      change: '+1',
-      changeType: 'increase' as const,
-      icon: Zap,
-      color: 'purple'
-    },
-    {
-      title: 'Tiempo Respuesta',
-      value: '245ms',
-      change: '-12ms',
-      changeType: 'decrease' as const,
-      icon: Clock,
-      color: 'orange'
-    }
-  ];
+
 
   const getStatColor = (color: string) => {
     const colors = {
@@ -92,7 +213,7 @@ export function IntegrationsDashboard() {
           <p className="text-gray-600">Gestiona las integraciones con sistemas ERP empresariales</p>
         </div>
         <div className="flex space-x-3">
-          <button className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+          <button onClick={() => navigate('/integrations/erp')} className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
               <Plus className="w-4 h-4 mr-2" />
               Nuevo Conector ERP
             </button>
@@ -173,10 +294,6 @@ export function IntegrationsDashboard() {
             <Filter className="w-4 h-4 mr-2" />
             Filtros
           </button>
-          <button className="flex items-center px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50">
-            <RefreshCw className="w-4 h-4 mr-2" />
-            Actualizar
-          </button>
         </div>
       </div>
 
@@ -248,48 +365,18 @@ export function IntegrationsDashboard() {
 
 // IntegrationsOverview component for the default route
 function IntegrationsOverview() {
-  const integrations = [
-    {
-      id: 1,
-      name: 'SAP ERP',
-      type: 'ERP',
-      status: 'active',
-      lastSync: '2024-01-15 14:30',
-      records: '1,247',
-      provider: 'SAP',
-      description: 'Integración con sistema SAP para sincronización de productos y órdenes'
-    },
-    {
-      id: 3,
-      name: 'Oracle WMS',
-      type: 'ERP',
-      status: 'syncing',
-      lastSync: '2024-01-15 14:20',
-      records: '2,156',
-      provider: 'Oracle',
-      description: 'Sistema de gestión de almacén Oracle para operaciones avanzadas'
-    },
-    {
-      id: 7,
-      name: 'Microsoft Dynamics',
-      type: 'ERP',
-      status: 'active',
-      lastSync: '2024-01-15 14:00',
-      records: '3,421',
-      provider: 'Microsoft',
-      description: 'Integración con Dynamics 365 para gestión empresarial completa'
-    },
-    {
-      id: 8,
-      name: 'NetSuite ERP',
-      type: 'ERP',
-      status: 'error',
-      lastSync: '2024-01-15 12:15',
-      records: '0',
-      provider: 'NetSuite',
-      description: 'Sistema ERP en la nube con error de conexión - requiere atención'
-    }
-  ];
+  const navigate = useNavigate();
+  const [integrations, setIntegrations] = React.useState<Array<{
+    id: string | number;
+    name: string;
+    type: string;
+    status: string;
+    lastSync: string;
+    records: string;
+    provider: string;
+    description: string;
+  }>>([]);
+  const [loading, setLoading] = React.useState(true);
 
   const getStatusColor = (status: string) => {
     const colors = {
@@ -329,12 +416,105 @@ function IntegrationsOverview() {
     }
   };
 
+  const providerFromType = (type: string | null) => {
+    const t = (type || '').toLowerCase();
+    if (t.includes('sap')) return 'SAP';
+    if (t.includes('netsuite')) return 'NetSuite';
+    if (t.includes('dynamics')) return 'Microsoft';
+    if (t.includes('odoo')) return 'Odoo';
+    if (t.includes('sage')) return 'Sage';
+    return type || '—';
+  };
+
+  React.useEffect(() => {
+    let mounted = true;
+    const loadConnectors = async () => {
+      try {
+        const { data, error } = await supabase
+          .from('erp_connectors')
+          .select('id,name,type,status,last_sync,records_processed,version')
+          .order('created_at', { ascending: false });
+        if (error) throw error;
+        const items = (data || []).map((c: any) => ({
+          id: c.id,
+          name: c.name || 'Conector ERP',
+          type: 'ERP',
+          status: c.status || 'inactive',
+          lastSync: c.last_sync ? new Date(c.last_sync).toLocaleString('es-ES') : '-',
+          records: (c.records_processed || 0).toLocaleString('es-ES'),
+          provider: providerFromType(c.type),
+          description: `${c.type || 'ERP'}${c.version ? ` · v${c.version}` : ''}`
+        }));
+        if (mounted) setIntegrations(items);
+      } catch (e) {
+        console.error('Error cargando conectores ERP:', e);
+        if (mounted) setIntegrations([]);
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    };
+    loadConnectors();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const handleSync = async (id: string | number) => {
+const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || 'http://localhost:8082';
+    setIntegrations(prev => prev.map(i => i.id === id ? { ...i, status: 'syncing' } : i));
+    try {
+      console.info('[Dashboard] Sync start', { id, apiBase });
+      if (!apiBase) throw new Error('Backend no configurado: defina VITE_AUTH_BACKEND_URL');
+      for (const target of ['products', 'purchase_orders'] as const) {
+        console.info('[Dashboard] Syncing target', { id, target });
+        const resp = await fetch(`${apiBase}/erp/connectors/${id}/sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ limit: 50, target })
+        });
+        const data = await resp.json();
+        if (!resp.ok || !data?.ok) {
+          throw new Error(data?.error || `Fallo en la sincronización de ${target}`);
+        }
+        console.info('[Dashboard] Target synced', { id, target, status: resp.status, processed: Number(data?.processed || 0), newCount: Number(data?.newCount || 0) });
+        // Notificación al Header
+        try {
+          window.dispatchEvent(new CustomEvent('erp:notify', { detail: { type: target, count: Number(data?.newCount || 0), processed: Number(data?.processed || 0), connectorId: id } }));
+        } catch {}
+        if (target === 'products') {
+          try { window.dispatchEvent(new Event('products:refresh')); } catch {}
+        }
+      }
+      const { data: connectors, error } = await supabase
+        .from('erp_connectors')
+        .select('id,name,type,status,last_sync,records_processed,version')
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      const items = (connectors || []).map((c: any) => ({
+        id: c.id,
+        name: c.name || 'Conector ERP',
+        type: 'ERP',
+        status: c.status || 'inactive',
+        lastSync: c.last_sync ? new Date(c.last_sync).toLocaleString('es-ES') : '-',
+        records: (c.records_processed || 0).toLocaleString('es-ES'),
+        provider: providerFromType(c.type),
+        description: `${c.type || 'ERP'}${c.version ? ` · v${c.version}` : ''}`
+      }));
+      setIntegrations(items);
+      console.info('[Dashboard] Sync finished', { id });
+    } catch (e: any) {
+      console.error('[Dashboard] Sync error', { id, message: e?.message || String(e) });
+      setIntegrations(prev => prev.map(i => i.id === id ? { ...i, status: 'error' } : i));
+      alert(e?.message || 'Error al sincronizar el conector');
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-lg font-semibold text-gray-900">Conectores ERP</h2>
         <div className="text-sm text-gray-500">
-          {integrations.length} integraciones configuradas
+          {loading ? 'Cargando…' : `${integrations.length} integraciones configuradas`}
         </div>
       </div>
 
@@ -371,20 +551,32 @@ function IntegrationsOverview() {
               </div>
               <div className="flex items-center space-x-2 ml-4">
                 {getStatusIcon(integration.status)}
-                <button className="text-gray-400 hover:text-gray-600">
+                <button
+                  onClick={() => handleSync(integration.id)}
+                  className={`inline-flex items-center px-2.5 py-1 text-sm border rounded-md ${integration.status === 'syncing' ? 'bg-gray-100 text-gray-500 border-gray-200 cursor-not-allowed' : 'bg-white text-blue-600 border-blue-200 hover:bg-blue-50'}`}
+                >
+                  <RefreshCw className={`w-4 h-4 mr-1 ${integration.status === 'syncing' ? 'animate-spin' : ''}`} />
+                  Actualizar
+                </button>
+                <button onClick={() => navigate('/integrations/erp')} className="text-gray-400 hover:text-gray-600">
                   <Settings className="w-4 h-4" />
                 </button>
               </div>
             </div>
           </div>
         ))}
+        {!loading && integrations.length === 0 && (
+          <div className="border border-gray-200 rounded-lg p-6 text-center text-sm text-gray-600">
+            No hay conectores configurados.
+          </div>
+        )}
       </div>
 
       {/* Quick Actions */}
        <div className="bg-gray-50 rounded-lg p-4">
          <h3 className="text-sm font-medium text-gray-900 mb-3">Acciones Rápidas</h3>
          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-           <button className="flex items-center justify-center px-4 py-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 text-sm">
+           <button onClick={() => navigate('/integrations/erp')} className="flex items-center justify-center px-4 py-3 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 text-sm">
              <Database className="w-4 h-4 mr-2 text-blue-600" />
              Nuevo Conector ERP
            </button>

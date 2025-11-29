@@ -1,59 +1,96 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { 
   Package, 
   FileText, 
   Truck, 
-  CheckCircle, 
-  Clock, 
-  AlertTriangle,
+  CheckCircle,
   Search,
   Filter,
   Plus,
   TrendingUp,
-  TrendingDown
+  TrendingDown,
+  Calendar
 } from 'lucide-react';
 import { PurchaseOrders } from './PurchaseOrders';
 import { ASNManagement } from './ASNManagement';
 import { ReceivingTasks } from './ReceivingTasks';
+import { Appointments } from './Appointments';
+import { ReceptionControl } from './ReceptionControl'
 
 export const ReceptionDashboard: React.FC = () => {
   const location = useLocation();
+
+  const [metrics, setMetrics] = useState<any | null>(null);
+  const [loading, setLoading] = useState<boolean>(false);
+  const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL;
+
+  useEffect(() => {
+    const fetchMetrics = async () => {
+      if (!AUTH_BACKEND_URL) return;
+      setLoading(true);
+      try {
+        const token = localStorage.getItem('app_token');
+        const resp = await fetch(`${AUTH_BACKEND_URL}/reception/metrics`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          setMetrics(data);
+        }
+      } catch (e) {
+        console.error('Error cargando métricas de recepción:', e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchMetrics();
+  }, [AUTH_BACKEND_URL]);
 
   const isActiveTab = (path: string) => {
     return location.pathname.includes(path);
   };
 
+  const formatChange = (n: number | undefined) => {
+    if (typeof n !== 'number' || isNaN(n)) return '0';
+    return n >= 0 ? `+${n}` : `${n}`;
+  };
+
+  const getChangeType = (n: number | undefined) => {
+    if (typeof n !== 'number' || isNaN(n)) return 'increase';
+    return n >= 0 ? 'increase' as const : 'decrease' as const;
+  };
+
   const stats = [
     {
       title: 'Órdenes Pendientes',
-      value: '24',
-      change: '+3',
-      changeType: 'increase' as const,
+      value: metrics?.pendingOrders ?? '—',
+      change: formatChange(metrics?.pendingChange),
+      changeType: getChangeType(metrics?.pendingChange),
       icon: FileText,
       color: 'blue'
     },
     {
       title: 'ASN Recibidos',
-      value: '18',
-      change: '+5',
-      changeType: 'increase' as const,
+      value: metrics?.asnReceived ?? '—',
+      change: formatChange(metrics?.asnChange),
+      changeType: getChangeType(metrics?.asnChange),
       icon: Truck,
       color: 'green'
     },
     {
       title: 'En Recepción',
-      value: '7',
-      change: '-2',
-      changeType: 'decrease' as const,
+      value: metrics?.inReceiving ?? '—',
+      change: formatChange(metrics?.inReceivingChange),
+      changeType: getChangeType(metrics?.inReceivingChange),
       icon: Package,
       color: 'yellow'
     },
     {
       title: 'Completados Hoy',
-      value: '12',
-      change: '+4',
-      changeType: 'increase' as const,
+      value: metrics?.completedToday ?? '—',
+      change: formatChange(metrics?.completedChange),
+      changeType: getChangeType(metrics?.completedChange),
       icon: CheckCircle,
       color: 'emerald'
     }
@@ -66,6 +103,10 @@ export const ReceptionDashboard: React.FC = () => {
       return <ASNManagement />;
     } else if (path.includes('/reception/receiving')) {
       return <ReceivingTasks />;
+    } else if (path.includes('/reception/appointments')) {
+      return <Appointments />;
+    } else if (path.includes('/reception/control')) {
+      return <ReceptionControl />;
     } else {
       return <PurchaseOrders />;
     }
@@ -77,13 +118,7 @@ export const ReceptionDashboard: React.FC = () => {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Recepción</h1>
-          <p className="text-gray-600">Gestión de órdenes de compra, ASN y recepción de mercancía</p>
-        </div>
-        <div className="flex space-x-3">
-          <button className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-            <Plus className="w-4 h-4 mr-2" />
-            Nueva Orden
-          </button>
+          <p className="text-gray-600">Gestión de órdenes de compra, citas, ASN y recepción de mercancía</p>
         </div>
       </div>
 
@@ -94,7 +129,7 @@ export const ReceptionDashboard: React.FC = () => {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-600">{stat.title}</p>
-                <p className="text-2xl font-bold text-gray-900">{stat.value}</p>
+                <p className="text-2xl font-bold text-gray-900">{loading ? '…' : stat.value}</p>
               </div>
               <div className={`p-3 rounded-full bg-${stat.color}-100`}>
                 <stat.icon className={`w-6 h-6 text-${stat.color}-600`} />
@@ -144,6 +179,17 @@ export const ReceptionDashboard: React.FC = () => {
               ASN
             </Link>
             <Link
+              to="/reception/appointments"
+              className={`flex items-center px-4 py-4 text-sm font-medium border-b-2 ${
+                isActiveTab('/reception/appointments')
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              <Calendar className="w-4 h-4 mr-2" />
+              Citas
+            </Link>
+            <Link
               to="/reception/receiving"
               className={`flex items-center px-4 py-4 text-sm font-medium border-b-2 ${
                 isActiveTab('/reception/receiving')
@@ -153,6 +199,17 @@ export const ReceptionDashboard: React.FC = () => {
             >
               <Package className="w-4 h-4 mr-2" />
               Tareas de Recepción
+            </Link>
+            <Link
+              to="/reception/control"
+              className={`flex items-center px-4 py-4 text-sm font-medium border-b-2 ${
+                isActiveTab('/reception/control')
+                  ? 'border-blue-500 text-blue-600'
+                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+              }`}
+            >
+              <Package className="w-4 h-4 mr-2" />
+              Control de Recepción
             </Link>
           </nav>
         </div>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   FileText, 
   Download, 
@@ -6,19 +6,10 @@ import {
   Mail, 
   Eye, 
   Plus, 
-  Search,
   Filter,
-  Calendar,
-  Package,
-  Truck,
-  User,
-  MapPin,
-  CheckCircle,
-  AlertTriangle,
   Clock,
   RefreshCw,
-  Archive,
-  Trash2
+  Archive
 } from 'lucide-react';
 
 interface ShippingDocument {
@@ -44,12 +35,24 @@ interface ShippingDocument {
   notes?: string;
 }
 
+type FilterType = 'all' | ShippingDocument['type'];
+type FilterStatus = 'all' | ShippingDocument['status'];
+type NewDocForm = {
+  type: ShippingDocument['type'];
+  orderNumber: string;
+  carrier: string;
+  trackingNumber: string;
+  customerName: string;
+  customerEmail: string;
+  notes: string;
+};
+
 export function ShippingDocuments() {
   const [selectedDocument, setSelectedDocument] = useState<ShippingDocument | null>(null);
   const [showDocumentModal, setShowDocumentModal] = useState(false);
   const [selectedDocuments, setSelectedDocuments] = useState<string[]>([]);
-  const [filterType, setFilterType] = useState<string>('all');
-  const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [filterType, setFilterType] = useState<FilterType>('all');
+  const [filterStatus, setFilterStatus] = useState<FilterStatus>('all');
 
   // Mock data
   const defaultDocuments: ShippingDocument[] = [
@@ -153,7 +156,7 @@ export function ShippingDocuments() {
     try {
       const saved = localStorage.getItem('shippingDocuments');
       return saved ? JSON.parse(saved) : defaultDocuments;
-    } catch (e) {
+    } catch {
       return defaultDocuments;
     }
   });
@@ -161,14 +164,14 @@ export function ShippingDocuments() {
   useEffect(() => {
     try {
       localStorage.setItem('shippingDocuments', JSON.stringify(documents));
-    } catch (e) {
+    } catch {
       // ignore storage errors
     }
   }, [documents]);
 
   const [showNewDocModal, setShowNewDocModal] = useState(false);
-  const [newDocForm, setNewDocForm] = useState({
-    type: 'label' as ShippingDocument['type'],
+  const [newDocForm, setNewDocForm] = useState<NewDocForm>({
+    type: 'label',
     orderNumber: '',
     carrier: '',
     trackingNumber: '',
@@ -225,7 +228,7 @@ export function ShippingDocuments() {
     setShowNewDocModal(false);
   };
 
-  const getTypeColor = (type: string) => {
+  const getTypeColor = (type: ShippingDocument['type']) => {
     switch (type) {
       case 'label': return 'text-blue-600 bg-blue-100';
       case 'invoice': return 'text-green-600 bg-green-100';
@@ -237,7 +240,7 @@ export function ShippingDocuments() {
     }
   };
 
-  const getTypeText = (type: string) => {
+  const getTypeText = (type: ShippingDocument['type']) => {
     switch (type) {
       case 'label': return 'Etiqueta';
       case 'invoice': return 'Factura';
@@ -249,7 +252,7 @@ export function ShippingDocuments() {
     }
   };
 
-  const getStatusColor = (status: string) => {
+  const getStatusColor = (status: ShippingDocument['status']) => {
     switch (status) {
       case 'draft': return 'text-gray-600 bg-gray-100';
       case 'generated': return 'text-blue-600 bg-blue-100';
@@ -260,7 +263,7 @@ export function ShippingDocuments() {
     }
   };
 
-  const getStatusText = (status: string) => {
+  const getStatusText = (status: ShippingDocument['status']) => {
     switch (status) {
       case 'draft': return 'Borrador';
       case 'generated': return 'Generado';
@@ -271,7 +274,7 @@ export function ShippingDocuments() {
     }
   };
 
-  const getStatusIcon = (status: string) => {
+  const getStatusIcon = (status: ShippingDocument['status']) => {
     switch (status) {
       case 'draft': return <Clock className="w-4 h-4" />;
       case 'generated': return <FileText className="w-4 h-4" />;
@@ -315,7 +318,7 @@ export function ShippingDocuments() {
     // Aquí iría la lógica para generar el documento
   };
 
-  const handleBulkAction = (action: string) => {
+  const handleBulkAction = (action: 'download' | 'print') => {
     console.log(`Acción en lote: ${action} para documentos:`, selectedDocuments);
     // Aquí iría la lógica para acciones en lote
   };
@@ -326,12 +329,32 @@ export function ShippingDocuments() {
     return typeMatch && statusMatch;
   });
 
+  // Cargar imagen de documento desde configuración (localStorage)
+  const [documentImageDataUrl, setDocumentImageDataUrl] = useState<string | null>(null);
+  useEffect(() => {
+    try {
+      const dataUrl = localStorage.getItem('document_image_data_url');
+      setDocumentImageDataUrl(dataUrl);
+    } catch (e) {
+      // ignorar
+    }
+  }, []);
+
   return (
     <div className="space-y-6">
       {/* Action Bar */}
       <div className="flex items-center justify-between">
         <div className="flex items-center space-x-4">
-          <h2 className="text-lg font-semibold text-gray-900">Documentos de Envío</h2>
+          <div className="flex items-center space-x-3">
+            {documentImageDataUrl && (
+              <img
+                src={documentImageDataUrl}
+                alt="Logo documento"
+                className="h-8 w-auto rounded"
+              />
+            )}
+            <h2 className="text-lg font-semibold text-gray-900">Documentos de Envío</h2>
+          </div>
           <span className="px-2 py-1 text-xs font-medium text-blue-600 bg-blue-100 rounded-full">
             {documents.length} documentos
           </span>
@@ -353,7 +376,7 @@ export function ShippingDocuments() {
         
         <select
           value={filterType}
-          onChange={(e) => setFilterType(e.target.value)}
+          onChange={(e) => setFilterType(e.target.value as FilterType)}
           className="text-sm border border-gray-300 rounded-md px-3 py-1"
         >
           <option value="all">Todos los tipos</option>
@@ -367,7 +390,7 @@ export function ShippingDocuments() {
 
         <select
           value={filterStatus}
-          onChange={(e) => setFilterStatus(e.target.value)}
+          onChange={(e) => setFilterStatus(e.target.value as FilterStatus)}
           className="text-sm border border-gray-300 rounded-md px-3 py-1"
         >
           <option value="all">Todos los estados</option>
@@ -588,9 +611,18 @@ export function ShippingDocuments() {
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
           <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-4xl shadow-lg rounded-md bg-white">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-gray-900">
-                Detalles del Documento - {selectedDocument.documentNumber}
-              </h3>
+              <div className="flex items-center gap-3">
+                {documentImageDataUrl && (
+                  <img
+                    src={documentImageDataUrl}
+                    alt="Logo documento"
+                    className="h-8 w-auto rounded"
+                  />
+                )}
+                <h3 className="text-lg font-semibold text-gray-900">
+                  Detalles del Documento - {selectedDocument.documentNumber}
+                </h3>
+              </div>
               <button
                 onClick={() => setShowDocumentModal(false)}
                 className="text-gray-400 hover:text-gray-600"

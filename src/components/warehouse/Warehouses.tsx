@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import type { FormEvent } from 'react';
 import { Warehouse as WarehouseIcon, Plus, RefreshCw } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
@@ -32,15 +33,16 @@ export function Warehouses() {
         .order('name', { ascending: true });
       if (error) throw error;
       setWarehouses(data || []);
-    } catch (e: any) {
-      console.error('Error cargando almacenes:', e);
-      setError(e.message || 'No se pudieron cargar los almacenes');
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Error desconocido';
+      console.error('Error cargando almacenes:', message);
+      setError(message || 'No se pudieron cargar los almacenes');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCreateWarehouse = async (e: React.FormEvent) => {
+  const handleCreateWarehouse = async (e: FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
@@ -56,7 +58,7 @@ export function Warehouses() {
         is_active: form.is_active,
       };
 
-      const { data, error } = await supabase
+      const { error } = await supabase
         .from('warehouses')
         .insert(payload)
         .select('id')
@@ -65,9 +67,10 @@ export function Warehouses() {
 
       setForm({ name: '', code: '', address: '', is_active: true });
       await loadWarehouses();
-    } catch (e: any) {
-      console.error('Error creando almacén:', e);
-      setError(e.message || 'No se pudo crear el almacén');
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Error desconocido';
+      console.error('Error creando almacén:', message);
+      setError(message || 'No se pudo crear el almacén');
     } finally {
       setLoading(false);
     }

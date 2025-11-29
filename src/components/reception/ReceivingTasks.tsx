@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { getSortComparator } from '../../config/sorting';
 import { 
   Package, 
   CheckCircle, 
@@ -6,16 +7,10 @@ import {
   AlertTriangle,
   User,
   MapPin,
-  Barcode,
-  Scale,
-  Eye,
-  Edit,
   X,
   Plus,
   Search,
-  Filter,
-  Camera,
-  FileText
+  Filter
 } from 'lucide-react';
 
 interface ReceivingTaskItem {
@@ -51,7 +46,6 @@ interface ReceivingTask {
 export const ReceivingTasks: React.FC = () => {
   const [selectedTask, setSelectedTask] = useState<ReceivingTask | null>(null);
   const [showTaskModal, setShowTaskModal] = useState(false);
-  const [showQualityModal, setShowQualityModal] = useState(false);
   const [showNewTaskModal, setShowNewTaskModal] = useState(false);
 
   // Carga inicial desde localStorage o datos mock
@@ -240,7 +234,9 @@ export const ReceivingTasks: React.FC = () => {
   };
 
   const handleViewTask = (task: ReceivingTask) => {
-    setSelectedTask(task);
+    // Usa configuración central para ordenar ítems
+    const sorted = { ...task, items: [...(task.items || [])].sort(getSortComparator('receiving')) };
+    setSelectedTask(sorted);
     setShowTaskModal(true);
   };
 
@@ -494,7 +490,10 @@ export const ReceivingTasks: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {selectedTask.items.map((item) => (
+                    {[...(selectedTask.items || [])]
+                      .slice()
+                      .sort(getSortComparator('receiving'))
+                      .map((item) => (
                       <tr key={item.id}>
                         <td className="px-4 py-2 text-sm text-gray-900">{item.sku}</td>
                         <td className="px-4 py-2 text-sm text-gray-900">{item.description}</td>
@@ -620,7 +619,7 @@ function NewTaskForm({ onCancel, onCreate }: { onCancel: () => void; onCreate: (
         </div>
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">Prioridad</label>
-          <select value={priority} onChange={e => setPriority(e.target.value as any)} className="w-full border border-gray-300 rounded-md px-3 py-2">
+          <select value={priority} onChange={e => setPriority(e.target.value as 'low' | 'medium' | 'high' | 'urgent')} className="w-full border border-gray-300 rounded-md px-3 py-2">
             <option value="low">Baja</option>
             <option value="medium">Media</option>
             <option value="high">Alta</option>

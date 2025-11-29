@@ -12,6 +12,8 @@ import {
   ArrowLeft
 } from 'lucide-react';
 
+const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || 'http://localhost:8082';
+
 interface ERPConnectorFormData {
   name: string;
   type: string;
@@ -32,6 +34,8 @@ interface ERPConnectorFormData {
     timeout: number;
     retryAttempts: number;
     batchSize: number;
+    direction?: 'entrada' | 'salida';
+    supportedTargets?: Array<'products' | 'purchase_orders' | 'sales_orders' | 'transfers'>;
   };
   isActive: boolean;
 }
@@ -62,7 +66,9 @@ export function ERPConnectorForm({ onClose, onSave, initialData }: ERPConnectorF
     connectionSettings: {
       timeout: initialData?.connectionSettings?.timeout || 30000,
       retryAttempts: initialData?.connectionSettings?.retryAttempts || 3,
-      batchSize: initialData?.connectionSettings?.batchSize || 100
+      batchSize: initialData?.connectionSettings?.batchSize || 100,
+      direction: initialData?.connectionSettings?.direction as ('entrada' | 'salida') || 'entrada',
+      supportedTargets: (initialData?.connectionSettings?.supportedTargets as Array<'products' | 'purchase_orders' | 'sales_orders' | 'transfers'>) || ['products', 'purchase_orders']
     },
     isActive: initialData?.isActive ?? true
   });
@@ -153,6 +159,21 @@ export function ERPConnectorForm({ onClose, onSave, initialData }: ERPConnectorF
     }
   };
 
+  const applySapEs5Preset = () => {
+    setFormData(prev => ({
+      ...prev,
+      type: prev.type?.includes('SAP') ? prev.type : 'SAP B1',
+      endpoint: 'https://sapes5.sap.com/sap/opu/odata/IWBEP/GWSAMPLE_BASIC',
+      connectionSettings: { ...prev.connectionSettings, odataVersion: 'v2', authType: 'basic' },
+      inventoryMapping: {
+        ...prev.inventoryMapping,
+        productIdField: 'ProductID',
+        descriptionField: 'Description',
+        priceField: 'Price',
+      },
+    }));
+  };
+
   const handleTestConnection = async () => {
     if (!formData.endpoint || (!formData.username && !formData.apiKey)) {
       setConnectionTestResult({
@@ -165,23 +186,34 @@ export function ERPConnectorForm({ onClose, onSave, initialData }: ERPConnectorF
     setIsTestingConnection(true);
     setConnectionTestResult(null);
 
-    // Simulate API call
     try {
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      // Simulate random success/failure for demo
-      const success = Math.random() > 0.3;
-      
-      setConnectionTestResult({
-        success,
-        message: success 
-          ? 'Conexión exitosa. El sistema ERP responde correctamente.'
-          : 'Error de conexión. Verifique las credenciales y el endpoint.'
+                  const resp = await fetch(`${apiBase}/erp/sap/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          endpoint: formData.endpoint,
+          username: formData.username,
+          password: formData.password,
+          apiKey: formData.apiKey,
+          timeout: formData.connectionSettings?.timeout || 30000,
+        }),
       });
-    } catch (error) {
+      const data = await resp.json();
+      if (!resp.ok || !data?.ok) {
+        setConnectionTestResult({
+          success: false,
+          message: data?.error || 'Fallo en la conexión',
+        });
+      } else {
+        setConnectionTestResult({
+          success: true,
+          message: 'Conexión exitosa',
+        });
+      }
+    } catch (error: any) {
       setConnectionTestResult({
         success: false,
-        message: 'Error al probar la conexión'
+        message: error?.message || 'Error al probar la conexión',
       });
     } finally {
       setIsTestingConnection(false);
@@ -272,6 +304,9 @@ export function ERPConnectorForm({ onClose, onSave, initialData }: ERPConnectorF
               <div className="md:col-span-2">
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   Endpoint / URL de API *
+                  <button type="button" className="ml-2 text-xs text-blue-600 underline" onClick={applySapEs5Preset}>
+                    Usar servidor de prueba SAP (ES5)
+                  </button>
                 </label>
                 <input
                   type="url"
@@ -476,6 +511,54 @@ export function ERPConnectorForm({ onClose, onSave, initialData }: ERPConnectorF
                   onChange={(e) => handleNestedInputChange('connectionSettings', 'batchSize', parseInt(e.target.value) || 100)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Dirección del Conector
+                </label>
+                <select
+                  value={formData.connectionSettings.direction || 'entrada'}
+                  onChange={(e) => handleNestedInputChange('connectionSettings', 'direction', e.target.value as 'entrada' | 'salida')}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value="entrada">Entrada</option>
+                  <option value="salida">Salida</option>
+                </select>
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Objetivos de Sincronización Soportados
+                </label>
+                <div className="flex flex-wrap gap-3">
+                  {[
+                    { key: 'products', label: 'Productos' },
+                    { key: 'purchase_orders', label: 'Órdenes de Compra' },
+                    { key: 'sales_orders', label: 'Pedidos' },
+                    { key: 'transfers', label: 'Traspasos' },
+                  ].map((t) => {
+                    const checked = (formData.connectionSettings.supportedTargets || []).includes(t.key as any);
+                    return (
+                      <label key={t.key} className="inline-flex items-center space-x-2 px-3 py-2 border rounded-lg">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            const prev = formData.connectionSettings.supportedTargets || [];
+                            const next = e.target.checked
+                              ? Array.from(new Set([...prev, t.key as any]))
+                              : prev.filter((x) => x !== (t.key as any));
+                            handleNestedInputChange('connectionSettings', 'supportedTargets', next);
+                          }}
+                        />
+                        <span className="text-sm">{t.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>

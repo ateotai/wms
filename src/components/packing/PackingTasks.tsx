@@ -1,23 +1,21 @@
-import React, { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
+import QRCode from 'qrcode';
+import JsBarcode from 'jsbarcode';
+import { supabase } from '../../lib/supabase';
+import { getSortComparator } from '../../config/sorting';
 import { 
   Package, 
   User, 
-  Clock, 
   CheckCircle, 
   AlertTriangle, 
   Play, 
-  Pause, 
-  Square,
-  BarChart3,
+  Pause,
   Timer,
-  Weight,
-  Ruler,
-  QrCode,
-  Camera,
-  FileText,
-  Plus,
-  Filter,
-  Search
+  Printer,
+  Edit2,
+  Truck,
+  Eye
 } from 'lucide-react';
 
 interface PackingItem {
@@ -40,7 +38,7 @@ interface PackingTask {
   orderId: string;
   orderNumber: string;
   assignedTo?: string;
-  status: 'pending' | 'in_progress' | 'paused' | 'completed' | 'cancelled';
+  status: 'pending' | 'in_progress' | 'paused' | 'completed' | 'embarked' | 'cancelled' | 'shipped';
   priority: 'low' | 'medium' | 'high';
   items: PackingItem[];
   packingType: 'standard' | 'fragile' | 'oversized' | 'hazardous';
@@ -62,6 +60,18 @@ export function PackingTasks() {
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showNewTaskModal, setShowNewTaskModal] = useState(false);
   const [activeTimer, setActiveTimer] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const [packages] = useState<Array<any>>([]);
+  const [printTask, setPrintTask] = useState<PackingTask | null>(null);
+  const qrRef = useRef<HTMLCanvasElement | null>(null);
+  const barcodeRef = useRef<SVGSVGElement | null>(null);
+  const [editingTask, setEditingTask] = useState<PackingTask | null>(null);
+  const [editingStatus, setEditingStatus] = useState<'paused'|'completed'>('paused');
+  const [shipTask, setShipTask] = useState<PackingTask | null>(null);
+  const [showShipModal, setShowShipModal] = useState(false);
+  const [shipForm, setShipForm] = useState({ vehicleNumber: '', note: '' });
+  const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'in_progress' | 'completed' | 'embarked' | 'shipped'>('pending');
+  const [filterDateRange, setFilterDateRange] = useState<'today' | '7days' | '30days' | 'all'>('7days');
   const [newItems, setNewItems] = useState<PackingItem[]>([
     { id: `tmp-${Date.now()}`, product: '', sku: '', quantity: 1, quantityPacked: 0, weight: 0, dimensions: '', location: '', barcode: '', fragile: false }
   ]);
@@ -76,11 +86,14 @@ export function PackingTasks() {
   });
 
   // Órdenes guardadas (ShippingOrders) desde localStorage
-  const loadSavedOrders = (): any[] => {
+  type SavedOrderItem = { product?: string; sku?: string; quantity?: number; weight?: number; dimensions?: string };
+  type SavedOrder = { id?: string | number; orderNumber?: string | number; assignedTo?: string; notes?: string; items?: SavedOrderItem[] };
+
+  const loadSavedOrders = (): SavedOrder[] => {
     try {
       const str = localStorage.getItem('packing_orders');
       const arr = str ? JSON.parse(str) : [];
-      return Array.isArray(arr) ? arr : [];
+      return Array.isArray(arr) ? (arr as SavedOrder[]) : [];
     } catch (e) {
       console.warn('No se pudieron leer órdenes desde localStorage:', e);
       return [];
@@ -109,7 +122,13 @@ export function PackingTasks() {
           if (!so) throw new Error('Respuesta inválida del backend');
 
           // Mapear items del backend a PackingItem
-          const mappedItems: PackingItem[] = (so.items || []).map((it: any, idx: number) => ({
+          type BackendItem = {
+            products?: { name?: string; sku?: string; weight?: number; dimensions?: string };
+            product?: string;
+            sku?: string;
+            quantity?: number;
+          };
+          const mappedItems: PackingItem[] = (so.items || []).map((it: BackendItem, idx: number) => ({
             id: `ord-${so.id || 'x'}-${idx}`,
             product: (it?.products?.name || it?.products?.sku || it?.product || ''),
             sku: (it?.products?.sku || it?.sku || ''),
@@ -141,7 +160,7 @@ export function PackingTasks() {
 
     // Intento 2: Fallback a órdenes guardadas en localStorage
     const list = loadSavedOrders();
-    const found = list.find((o: any) => String(o.orderNumber).trim() === orderNum);
+    const found = list.find((o) => String(o.orderNumber ?? '').trim() === orderNum);
     if (!found) {
       alert('No se encontró una orden con ese número en las Órdenes de Envío.');
       return;
@@ -151,7 +170,7 @@ export function PackingTasks() {
       assignedTo: (found.assignedTo ?? prev.assignedTo ?? ''),
       notes: found.notes ?? prev.notes ?? '',
     }));
-    const mappedItems: PackingItem[] = (found.items || []).map((it: any, idx: number) => ({
+    const mappedItems: PackingItem[] = (found.items || []).map((it: SavedOrderItem, idx: number) => ({
       id: `ord-${found.id || 'x'}-${idx}`,
       product: it.product || '',
       sku: it.sku || '',
@@ -168,120 +187,114 @@ export function PackingTasks() {
     }
   };
 
-  // Mock data
-  const [tasks, setTasks] = useState<PackingTask[]>([
-    {
-      id: '1',
-      taskNumber: 'PACK-001',
-      orderId: '1',
-      orderNumber: 'ORD-2024-001',
-      assignedTo: 'Juan Pérez',
-      status: 'in_progress',
-      priority: 'high',
-      items: [
-        {
-          id: '1',
-          product: 'Laptop HP Pavilion',
-          sku: 'HP-PAV-001',
-          quantity: 1,
-          quantityPacked: 0,
-          weight: 2.5,
-          dimensions: '35x25x3 cm',
-          location: 'A-01-15',
-          barcode: '1234567890123',
-          fragile: true,
-          specialInstructions: 'Usar material de protección extra'
-        },
-        {
-          id: '2',
-          product: 'Mouse Inalámbrico',
-          sku: 'MS-WL-001',
-          quantity: 1,
-          quantityPacked: 1,
-          weight: 0.1,
-          dimensions: '12x8x4 cm',
-          location: 'B-02-08',
-          barcode: '1234567890124',
-          fragile: false
-        }
-      ],
-      packingType: 'fragile',
-      estimatedTime: 15,
-      actualTime: 12,
-      startTime: '2024-01-15T09:00:00Z',
-      packingMaterials: ['Caja mediana', 'Papel burbuja', 'Relleno', 'Cinta adhesiva'],
-      boxType: 'Caja reforzada 40x30x15 cm',
-      totalWeight: 2.6,
-      totalVolume: 18000, // cm³
-      createdAt: '2024-01-15T08:30:00Z',
-      notes: 'Cliente solicita empaquetado especial',
-      qualityCheck: false
-    },
-    {
-      id: '2',
-      taskNumber: 'PACK-002',
-      orderId: '2',
-      orderNumber: 'ORD-2024-002',
-      assignedTo: 'María González',
-      status: 'pending',
-      priority: 'medium',
-      items: [
-        {
-          id: '3',
-          product: 'Smartphone Samsung',
-          sku: 'SAM-GAL-001',
-          quantity: 2,
-          quantityPacked: 0,
-          weight: 0.4,
-          dimensions: '16x8x1 cm',
-          location: 'C-03-12',
-          barcode: '1234567890125',
-          fragile: true
-        }
-      ],
-      packingType: 'standard',
-      estimatedTime: 10,
-      packingMaterials: ['Caja pequeña', 'Papel burbuja', 'Cinta adhesiva'],
-      boxType: 'Caja estándar 25x20x10 cm',
-      totalWeight: 0.8,
-      totalVolume: 5000,
-      createdAt: '2024-01-15T10:15:00Z',
-      qualityCheck: false
-    },
-    {
-      id: '3',
-      taskNumber: 'PACK-003',
-      orderId: '3',
-      orderNumber: 'ORD-2024-003',
-      status: 'completed',
-      priority: 'low',
-      items: [
-        {
-          id: '4',
-          product: 'Tablet iPad Air',
-          sku: 'APL-IPD-001',
-          quantity: 1,
-          quantityPacked: 1,
-          weight: 0.6,
-          dimensions: '25x18x1 cm',
-          location: 'D-04-05',
-          barcode: '1234567890126',
-          fragile: true
-        }
-      ],
-      packingType: 'fragile',
-      estimatedTime: 12,
-      actualTime: 10,
-      startTime: '2024-01-15T11:00:00Z',
-      endTime: '2024-01-15T11:10:00Z',
-      packingMaterials: ['Caja mediana', 'Papel burbuja', 'Cinta adhesiva'],
-      boxType: 'Caja reforzada 30x25x8 cm',
-      totalWeight: 0.6,
-      totalVolume: 6000,
-      createdAt: '2024-01-15T10:45:00Z',
-      qualityCheck: true
+  const [tasks, setTasks] = useState<PackingTask[]>([]);
+
+  useEffect(() => {
+    try {
+      const existingStr = localStorage.getItem('packing_tasks');
+      const existing: PackingTask[] = existingStr ? JSON.parse(existingStr) : [];
+      let merged: PackingTask[] = Array.isArray(existing) ? existing : [];
+      const pkgStr = localStorage.getItem('packing_packages');
+      const pkgs = pkgStr ? JSON.parse(pkgStr) : [];
+      const seen = new Set<string>(merged.map(t => String(t.taskNumber || t.id)));
+      const listPkgs: Array<any> = Array.isArray(pkgs) ? pkgs : [];
+      for (const p of listPkgs) {
+        const key = String(p.packageId || '');
+        if (!key || seen.has(key)) continue;
+        const statusMap: any = (p.status === 'in_process' ? 'in_progress' : p.status);
+        const items: PackingItem[] = (p.items || []).map((it: any, idx: number) => ({
+          id: `pkg-${key}-${idx}`,
+          product: String(it.product || ''),
+          sku: String(it.sku || ''),
+          quantity: Number(it.quantity || 0),
+          quantityPacked: statusMap === 'completed' ? Number(it.quantity || 0) : 0,
+          weight: Number(it.weight || 0),
+          dimensions: String(it.dimensions || ''),
+          location: '',
+          barcode: String(it.sku || ''),
+          fragile: false,
+        }));
+        const t: PackingTask = {
+          id: key,
+          taskNumber: key,
+          orderId: key,
+          orderNumber: String(p.orderNumber || ''),
+          assignedTo: String(p.operator || ''),
+          status: statusMap,
+          priority: 'medium',
+          items,
+          packingType: 'standard',
+          estimatedTime: 10,
+          packingMaterials: ['Caja', 'Cinta'],
+          boxType: 'Caja estándar',
+          totalWeight: items.reduce((s, it) => s + (it.weight || 0) * (it.quantity || 0), 0),
+          totalVolume: 0,
+          createdAt: String(p.createdAt || new Date().toISOString()),
+          notes: undefined,
+          qualityCheck: false,
+        };
+        merged = [t, ...merged];
+        seen.add(key);
+      }
+      setTasks(merged);
+      try { localStorage.setItem('packing_tasks', JSON.stringify(merged)); } catch {}
+    } catch {}
+    const handlerTask = (e: any) => {
+      const task = e?.detail?.task;
+      if (task) {
+        setTasks(prev => [task, ...prev]);
+      }
+    };
+    window.addEventListener('packingTaskFromBatch', handlerTask as any);
+    return () => {
+      window.removeEventListener('packingTaskFromBatch', handlerTask as any);
+    };
+  }, []);
+
+  const filteredTasks = (() => {
+    const now = new Date();
+    let fromDate: Date | null = null;
+    if (filterDateRange === 'today') {
+      const d = new Date(now); d.setHours(0,0,0,0); fromDate = d;
+    } else if (filterDateRange === '7days') {
+      const d = new Date(now); d.setDate(d.getDate()-7); fromDate = d;
+    } else if (filterDateRange === '30days') {
+      const d = new Date(now); d.setDate(d.getDate()-30); fromDate = d;
     }
-  ]);
+    return tasks
+      .filter(t => filterStatus === 'all' ? true : String(t.status) === filterStatus)
+      .filter(t => {
+        if (!fromDate) return true;
+        const created = new Date(t.createdAt || now);
+        return created >= fromDate;
+      });
+  })();
+
+  useEffect(() => {
+    if (!printTask) return;
+    try {
+      if (qrRef.current) {
+        const payload = {
+          id: printTask.id,
+          taskNumber: printTask.taskNumber,
+          orderNumber: printTask.orderNumber,
+          assignedTo: printTask.assignedTo,
+          items: printTask.items?.map(it => ({ sku: it.sku, qty: it.quantity })) || [],
+          createdAt: printTask.createdAt,
+        };
+        QRCode.toCanvas(qrRef.current, JSON.stringify(payload), { width: 180 }).catch(() => {});
+      }
+      if (barcodeRef.current) {
+        JsBarcode(barcodeRef.current, printTask.taskNumber, { format: 'CODE128', width: 2, height: 50, displayValue: true });
+      }
+    } catch {}
+  }, [printTask]);
+
+  const persistTasks = (list: PackingTask[]) => {
+    try {
+      localStorage.setItem('packing_tasks', JSON.stringify(list));
+    } catch {}
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -289,6 +302,7 @@ export function PackingTasks() {
       case 'in_progress': return 'text-blue-600 bg-blue-100';
       case 'paused': return 'text-orange-600 bg-orange-100';
       case 'completed': return 'text-green-600 bg-green-100';
+      case 'embarked': return 'text-indigo-600 bg-indigo-100';
       case 'cancelled': return 'text-red-600 bg-red-100';
       default: return 'text-gray-600 bg-gray-100';
     }
@@ -300,6 +314,8 @@ export function PackingTasks() {
       case 'in_progress': return 'En Progreso';
       case 'paused': return 'Pausada';
       case 'completed': return 'Completada';
+      case 'embarked': return 'Embarcado';
+      case 'shipped': return 'Enviado';
       case 'cancelled': return 'Cancelada';
       default: return status;
     }
@@ -344,8 +360,38 @@ export function PackingTasks() {
   };
 
   const handleViewTask = (task: PackingTask) => {
-    setSelectedTask(task);
+    // Usa configuración central para ordenar ítems
+    const sorted = { ...task, items: [...(task.items || [])].sort(getSortComparator('packing')) };
+    setSelectedTask(sorted);
     setShowTaskModal(true);
+  };
+
+  const markItemPacked = async (itemId: string) => {
+    if (!selectedTask) return;
+    const updatedItems = (selectedTask.items || []).map(it => it.id === itemId ? { ...it, quantityPacked: it.quantity } : it);
+    const updatedTask = { ...selectedTask, items: updatedItems };
+    setSelectedTask(updatedTask);
+    setTasks(prev => prev.map(t => t.id === updatedTask.id ? updatedTask : t));
+    try {
+      const listStr = localStorage.getItem('packing_tasks');
+      const list = listStr ? JSON.parse(listStr) : [];
+      const newList = Array.isArray(list) ? list.map((t: any) => t.id === updatedTask.id ? updatedTask : t) : [];
+      persistTasks(newList);
+    } catch {}
+    const total = updatedItems.reduce((s, it) => s + (it.quantity || 0), 0);
+    const packed = updatedItems.reduce((s, it) => s + (it.quantityPacked || 0), 0);
+    if (total > 0 && packed >= total) {
+      const completed = { ...updatedTask, status: 'completed' };
+      setSelectedTask(completed);
+      setTasks(prev => prev.map(t => t.id === completed.id ? completed : t));
+      try {
+        const listStr = localStorage.getItem('packing_tasks');
+        const list = listStr ? JSON.parse(listStr) : [];
+        const newList = list.map((t: any) => t.id === completed.id ? completed : t);
+        localStorage.setItem('packing_tasks', JSON.stringify(newList));
+      } catch {}
+      try { await supabase.from('packing_orders').update({ packing_status: 'completed', status: 'ready' }).eq('packing_id', completed.taskNumber); } catch {}
+    }
   };
 
   const handleStartTask = (taskId: string) => {
@@ -361,6 +407,18 @@ export function PackingTasks() {
   const handleCompleteTask = (taskId: string) => {
     setActiveTimer(null);
     console.log('Completando tarea:', taskId);
+  };
+
+  const handleEmbarkTask = async (task: PackingTask) => {
+    const embarked: PackingTask = { ...task, status: 'embarked' };
+    setTasks(prev => prev.map(t => t.id === embarked.id ? embarked : t));
+    try {
+      const listStr = localStorage.getItem('packing_tasks');
+      const list = listStr ? JSON.parse(listStr) : [];
+      const newList = Array.isArray(list) ? list.map((t: any) => t.id === embarked.id ? embarked : t) : [];
+      localStorage.setItem('packing_tasks', JSON.stringify(newList));
+    } catch {}
+    try { await supabase.from('packing_orders').update({ status: 'embarked' }).eq('packing_id', embarked.taskNumber); } catch {}
   };
 
   const getTaskProgress = (task: PackingTask) => {
@@ -381,7 +439,7 @@ export function PackingTasks() {
     setNewItems((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const updateItem = (index: number, field: keyof PackingItem, value: any) => {
+  const updateItem = (index: number, field: keyof PackingItem, value: string | number | boolean) => {
     setNewItems((prev) => prev.map((it, i) => i === index ? { ...it, [field]: field === 'quantity' || field === 'weight' ? Number(value) : value } : it));
   };
 
@@ -452,20 +510,35 @@ export function PackingTasks() {
             {tasks.filter(t => t.status !== 'completed').length} activas
           </span>
         </div>
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={() => setShowNewTaskModal(true)}
-            className="inline-flex items-center px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
-          >
-            <Plus className="w-4 h-4 mr-2" />
-            Nueva Tarea
-          </button>
+        <div className="flex items-center space-x-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-600">Estado</label>
+            <select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value as any)} className="mt-1 px-3 py-2 border border-gray-300 rounded-md text-sm">
+              <option value="pending">Pendiente</option>
+              <option value="in_progress">En proceso</option>
+              <option value="completed">Completado</option>
+              <option value="embarked">Embarcado</option>
+              <option value="shipped">Enviado</option>
+              <option value="all">Todos</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-600">Rango</label>
+            <select value={filterDateRange} onChange={(e) => setFilterDateRange(e.target.value as any)} className="mt-1 px-3 py-2 border border-gray-300 rounded-md text-sm">
+              <option value="today">Hoy</option>
+              <option value="7days">Últimos 7 días</option>
+              <option value="30days">Últimos 30 días</option>
+              <option value="all">Todos</option>
+            </select>
+          </div>
         </div>
       </div>
 
+      {/* Packages Grid removed to show only formatted tasks cards */}
+
       {/* Tasks Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {tasks.map((task) => (
+        {filteredTasks.map((task) => (
           <div key={task.id} className="bg-white border border-gray-200 rounded-lg p-6 hover:shadow-md transition-shadow">
             {/* Task Header */}
             <div className="flex items-center justify-between mb-4">
@@ -556,45 +629,210 @@ export function PackingTasks() {
             <div className="flex items-center justify-between">
               <button
                 onClick={() => handleViewTask(task)}
-                className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                className="text-blue-600 hover:text-blue-800 text-sm font-medium inline-flex items-center"
+                title="Ver Detalles"
               >
-                Ver Detalles
+                <Eye className="w-4 h-4" />
               </button>
               
-              <div className="flex items-center space-x-2">
-                {task.status === 'pending' && (
+            <div className="flex items-center space-x-2">
+              {task.status === 'pending' && (
+                <button
+                  onClick={() => handleStartTask(task.id)}
+                  className="inline-flex items-center px-2 py-1 border border-transparent text-xs font-medium rounded text-white bg-green-600 hover:bg-green-700"
+                >
+                  <Play className="w-3 h-3 mr-1" />
+                  Iniciar
+                </button>
+              )}
+                <button
+                  onClick={() => setPrintTask(task)}
+                  className="inline-flex items-center px-2 py-1 border border-gray-300 text-xs font-medium rounded text-gray-700 hover:bg-gray-50"
+                  title="Imprimir"
+                >
+                  <Printer className="w-3 h-3" />
+                </button>
+                <button
+                  onClick={() => { setEditingTask(task); setEditingStatus('paused'); }}
+                  className="inline-flex items-center px-2 py-1 border border-gray-300 text-xs font-medium rounded text-gray-700 hover:bg-gray-50"
+                  title="Editar estado"
+                >
+                  <Edit2 className="w-3 h-3" />
+                </button>
+              {task.status === 'in_progress' && (
+                <>
                   <button
-                    onClick={() => handleStartTask(task.id)}
-                    className="inline-flex items-center px-2 py-1 border border-transparent text-xs font-medium rounded text-white bg-green-600 hover:bg-green-700"
+                    onClick={() => handlePauseTask(task.id)}
+                    className="inline-flex items-center px-2 py-1 border border-transparent text-xs font-medium rounded text-white bg-orange-600 hover:bg-orange-700"
                   >
-                    <Play className="w-3 h-3 mr-1" />
-                    Iniciar
+                    <Pause className="w-3 h-3 mr-1" />
+                    Pausar
                   </button>
-                )}
-                
-                {task.status === 'in_progress' && (
-                  <>
-                    <button
-                      onClick={() => handlePauseTask(task.id)}
-                      className="inline-flex items-center px-2 py-1 border border-transparent text-xs font-medium rounded text-white bg-orange-600 hover:bg-orange-700"
-                    >
-                      <Pause className="w-3 h-3 mr-1" />
-                      Pausar
-                    </button>
-                    <button
-                      onClick={() => handleCompleteTask(task.id)}
-                      className="inline-flex items-center px-2 py-1 border border-transparent text-xs font-medium rounded text-white bg-blue-600 hover:bg-blue-700"
-                    >
-                      <CheckCircle className="w-3 h-3 mr-1" />
-                      Completar
-                    </button>
-                  </>
-                )}
-              </div>
+                  <button
+                    onClick={() => handleCompleteTask(task.id)}
+                    className="inline-flex items-center px-2 py-1 border border-transparent text-xs font-medium rounded text-white bg-blue-600 hover:bg-blue-700"
+                  >
+                    <CheckCircle className="w-3 h-3 mr-1" />
+                    Completar
+                  </button>
+                </>
+              )}
+              {task.status === 'completed' && (
+                <button
+                  onClick={() => handleEmbarkTask(task)}
+                  className="inline-flex items-center px-2 py-1 border border-transparent text-xs font-medium rounded text-white bg-indigo-600 hover:bg-indigo-700"
+                >
+                  Embarcar
+                </button>
+              )}
+              {task.status === 'embarked' && (
+                <button
+                  onClick={() => { setShipTask(task); setShowShipModal(true); }}
+                  className="inline-flex items-center px-2 py-1 border border-gray-300 text-xs font-medium rounded text-gray-700 hover:bg-gray-50"
+                  title="Marcar Enviado"
+                >
+                  <Truck className="w-3 h-3" />
+                </button>
+              )}
             </div>
           </div>
-        ))}
+        </div>
+      ))}
       </div>
+
+      {printTask && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-3xl shadow-lg rounded-md bg-white">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Imprimir Tarea - {printTask.taskNumber}</h3>
+              <button onClick={() => setPrintTask(null)} className="text-gray-400 hover:text-gray-600">×</button>
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+              <div>
+                <div className="text-sm font-medium text-gray-700">QR</div>
+                <canvas ref={qrRef} className="mt-2 border border-gray-200 rounded" width={180} height={180}></canvas>
+              </div>
+              <div className="lg:col-span-2">
+                <div className="text-sm font-medium text-gray-700 mb-2">Código de barras</div>
+                <svg ref={barcodeRef} className="w-full h-16"></svg>
+                <div className="mt-4 bg-gray-50 border border-gray-200 rounded p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <Package className="w-4 h-4 text-blue-600" />
+                      <span className="text-sm font-semibold text-gray-900">{printTask.taskNumber}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={`px-2 py-1 text-xs font-semibold rounded-full ${getStatusColor(printTask.status)}`}>{getStatusText(printTask.status)}</span>
+                      <span className={`px-2 py-1 text-xs font-semibold rounded-full ${printTask.priority === 'high' ? 'text-red-600 bg-red-100' : printTask.priority === 'medium' ? 'text-yellow-600 bg-yellow-100' : 'text-green-600 bg-green-100'}`}>{printTask.priority === 'high' ? 'Alta' : printTask.priority === 'medium' ? 'Media' : 'Baja'}</span>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+                    <div className="flex items-center gap-2 text-gray-700"><User className="w-4 h-4 text-gray-400" /><span>{printTask.assignedTo || 'Sin asignar'}</span></div>
+                    <div className="text-gray-700">Orden: <span className="font-medium text-gray-900">{printTask.orderNumber}</span></div>
+                    <div className="text-gray-700">Modelo: <span className="font-medium text-gray-900">{(printTask as any).meta?.model || 'Estándar'}</span></div>
+                    <div className="text-gray-700">Estación: <span className="font-medium text-gray-900">{(printTask as any).meta?.station || 'E-01'}</span></div>
+                    <div className="text-gray-700">Lotes: <span className="font-medium text-gray-900">{((printTask as any).meta?.batchCodes || []).join(', ')}</span></div>
+                    <div className="text-gray-700">Ítems: <span className="font-medium text-gray-900">{(printTask as any).meta?.totalItems ?? printTask.items?.reduce((s:number,i:any)=>s+(i.quantity||0),0)}</span></div>
+                    <div className="text-gray-700">Pedidos: <span className="font-medium text-gray-900">{(printTask as any).meta?.totalOrders ?? 1}</span></div>
+                    <div className="text-gray-700">Creado: <span className="font-medium text-gray-900">{new Date(printTask.createdAt).toLocaleString()}</span></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => window.print()} className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Imprimir</button>
+              <button onClick={() => setPrintTask(null)} className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700">Cerrar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showShipModal && shipTask && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-md shadow-lg rounded-md bg-white">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Marcar Enviado</h3>
+              <button onClick={() => setShowShipModal(false)} className="text-gray-400 hover:text-gray-600">×</button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Número de vehículo</label>
+                <input type="text" value={shipForm.vehicleNumber} onChange={(e) => setShipForm({ ...shipForm, vehicleNumber: e.target.value })} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nota</label>
+                <textarea value={shipForm.note} onChange={(e) => setShipForm({ ...shipForm, note: e.target.value })} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm" rows={3}></textarea>
+              </div>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setShowShipModal(false)} className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+              <button onClick={async () => {
+                const shipped = { ...shipTask, status: 'shipped' as const, notes: shipForm.note ? `${shipTask.notes ? shipTask.notes + ' | ' : ''}Vehículo: ${shipForm.vehicleNumber}; Nota: ${shipForm.note}` : shipTask.notes };
+                setTasks(prev => prev.map(t => t.id === shipped.id ? shipped : t));
+                try {
+                  const listStr = localStorage.getItem('packing_tasks');
+                  const list = listStr ? JSON.parse(listStr) : [];
+                  const newList = list.map((t: any) => t.id === shipped.id ? shipped : t);
+                  localStorage.setItem('packing_tasks', JSON.stringify(newList));
+                } catch {}
+                try { await supabase.from('packing_orders').update({ status: 'shipped', shipping_vehicle_number: shipForm.vehicleNumber || null, shipping_note: shipForm.note || null }).eq('packing_id', shipped.taskNumber); } catch {}
+                setShowShipModal(false);
+                setShipTask(null);
+                setShipForm({ vehicleNumber: '', note: '' });
+              }} className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700">Guardar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingTask && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-11/12 max-w-md shadow-lg rounded-md bg-white">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Editar Estado</h3>
+              <button onClick={() => setEditingTask(null)} className="text-gray-400 hover:text-gray-600">×</button>
+            </div>
+            <div className="space-y-4">
+              <div className="bg-gray-50 border border-gray-200 rounded p-4 text-sm">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Package className="w-4 h-4 text-blue-600" />
+                    <span className="font-semibold text-gray-900">{editingTask.taskNumber}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className={`px-2 py-1 text-xs font-semibold rounded-full ${editingTask.status === 'pending' ? 'text-gray-600 bg-gray-100' : editingTask.status === 'in_progress' ? 'text-blue-600 bg-blue-100' : 'text-green-600 bg-green-100'}`}>{editingTask.status === 'pending' ? 'Pendiente' : editingTask.status === 'in_progress' ? 'En proceso' : 'Completado'}</span>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="flex items-center gap-2 text-gray-700"><User className="w-4 h-4 text-gray-400" /><span>{editingTask.assignedTo || 'Sin asignar'}</span></div>
+                  <div className="text-gray-700">Orden: <span className="font-medium text-gray-900">{editingTask.orderNumber}</span></div>
+                  <div className="text-gray-700">Modelo: <span className="font-medium text-gray-900">{(editingTask as any).meta?.model || 'Estándar'}</span></div>
+                  <div className="text-gray-700">Estación: <span className="font-medium text-gray-900">{(editingTask as any).meta?.station || 'E-01'}</span></div>
+                  <div className="text-gray-700">Lotes: <span className="font-medium text-gray-900">{((editingTask as any).meta?.batchCodes || []).join(', ')}</span></div>
+                  <div className="text-gray-700">Ítems: <span className="font-medium text-gray-900">{(editingTask as any).meta?.totalItems ?? editingTask.items?.reduce((s:number,i:any)=>s+(i.quantity||0),0)}</span></div>
+                  <div className="text-gray-700">Pedidos: <span className="font-medium text-gray-900">{(editingTask as any).meta?.totalOrders ?? 1}</span></div>
+                  <div className="text-gray-700">Creado: <span className="font-medium text-gray-900">{new Date(editingTask.createdAt).toLocaleString()}</span></div>
+                </div>
+              </div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Estado</label>
+              <select value={editingStatus} onChange={(e) => setEditingStatus(e.target.value as any)} className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
+                <option value="paused">Suspendido</option>
+                <option value="completed">Completado</option>
+              </select>
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setEditingTask(null)} className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">Cancelar</button>
+              <button onClick={() => {
+                if (!editingTask) return;
+                const updated = tasks.map(t => t.id === editingTask.id ? { ...t, status: editingStatus } : t);
+                setTasks(updated);
+                persistTasks(updated);
+                setEditingTask(null);
+              }} className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700">Guardar</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Task Details Modal */}
       {showTaskModal && selectedTask && (
@@ -729,10 +967,14 @@ export function PackingTasks() {
                       <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Cantidad</th>
                       <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Empaquetado</th>
                       <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase">Estado</th>
+                      <th className="px-4 py-2"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {selectedTask.items.map((item) => (
+                    {[...(selectedTask.items || [])]
+                      .slice()
+                      .sort(getSortComparator('packing'))
+                      .map((item) => (
                       <tr key={item.id}>
                         <td className="px-4 py-2">
                           <div>
@@ -744,6 +986,13 @@ export function PackingTasks() {
                               </div>
                             )}
                           </div>
+                        </td>
+                        <td className="px-4 py-2 text-right">
+                          {item.quantityPacked >= item.quantity ? (
+                            <span className="inline-flex px-2 py-1 text-xs font-semibold rounded-full text-green-600 bg-green-100">Listo</span>
+                          ) : (
+                            <button onClick={() => markItemPacked(item.id)} className="px-2 py-1 bg-green-600 text-white rounded-md text-xs hover:bg-green-700">Listo</button>
+                          )}
                         </td>
                         <td className="px-4 py-2 text-sm text-gray-500 font-mono">{item.sku}</td>
                         <td className="px-4 py-2 text-sm text-gray-900">{item.location}</td>
@@ -787,8 +1036,26 @@ export function PackingTasks() {
               >
                 Cerrar
               </button>
-              <button className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700">
-                Editar Tarea
+              <button
+                onClick={async () => {
+                  const progress = getTaskProgress(selectedTask);
+                  if (progress >= 100) {
+                    const completed = { ...selectedTask, status: 'completed' as const };
+                    setSelectedTask(completed);
+                    setTasks(prev => prev.map(t => t.id === completed.id ? completed : t));
+                    try {
+                      const listStr = localStorage.getItem('packing_tasks');
+                      const list = listStr ? JSON.parse(listStr) : [];
+                      const newList = list.map((t: any) => t.id === completed.id ? completed : t);
+                      localStorage.setItem('packing_tasks', JSON.stringify(newList));
+                    } catch {}
+                    try { await supabase.from('packing_orders').update({ packing_status: 'completed', status: 'ready' }).eq('packing_id', completed.taskNumber); } catch {}
+                  }
+                }}
+                className={`px-4 py-2 rounded-md text-sm font-medium ${getTaskProgress(selectedTask) >= 100 ? 'text-white bg-blue-600 hover:bg-blue-700' : 'text-gray-500 bg-gray-200 cursor-not-allowed'}`}
+                disabled={getTaskProgress(selectedTask) < 100}
+              >
+                Guardar
               </button>
             </div>
           </div>

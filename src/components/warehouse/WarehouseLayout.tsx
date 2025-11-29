@@ -1,31 +1,61 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import type { ChangeEvent } from 'react';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
-import { Map, Settings, BarChart3, Package, MapPin, Warehouse as WarehouseIcon } from 'lucide-react';
+import { Map, Settings, BarChart3, Package, MapPin, Warehouse as WarehouseIcon, Rows, Layers, AlertTriangle } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import { WarehouseMap } from './WarehouseMap';
 import { ZoneConfiguration } from './ZoneConfiguration';
 import { WarehouseLocations } from './WarehouseLocations';
 import { Warehouses } from './Warehouses';
+import { AislesManagement } from './AislesManagement';
+import { RacksManagement } from './RacksManagement';
 import { supabase } from '../../lib/supabase';
+
+type TabId = 'map' | 'warehouses' | 'locations' | 'zones' | 'aisles' | 'racks' | 'analytics' | 'capacity';
+type Tab = { id: TabId; name: string; icon: LucideIcon; path: string };
 
 export function WarehouseLayout() {
   const location = useLocation();
+  const [isWarehouseClosed, setIsWarehouseClosed] = useState<boolean>(false);
+
+  // Read closure flag from localStorage on mount and route changes
+  useEffect(() => {
+    try {
+      const closed = localStorage.getItem('warehouse_closed') === 'true';
+      setIsWarehouseClosed(closed);
+    } catch {
+      // ignore
+    }
+  }, [location]);
 
   const isActiveTab = (path: string) => {
     return location.pathname.includes(path);
   };
 
-  const tabs = [
-    {
-      id: 'map',
-      name: 'Mapa del Almacén',
-      icon: Map,
-      path: '/warehouse/map'
-    },
+  const tabs: Tab[] = [
     {
       id: 'warehouses',
       name: 'Almacenes',
       icon: WarehouseIcon,
       path: '/warehouse/warehouses'
+    },
+    {
+      id: 'zones',
+      name: 'Zonas',
+      icon: Settings,
+      path: '/warehouse/zones'
+    },
+    {
+      id: 'aisles',
+      name: 'Pasillos',
+      icon: Rows,
+      path: '/warehouse/aisles'
+    },
+    {
+      id: 'racks',
+      name: 'Rack',
+      icon: Layers,
+      path: '/warehouse/racks'
     },
     {
       id: 'locations',
@@ -34,10 +64,10 @@ export function WarehouseLayout() {
       path: '/warehouse/locations'
     },
     {
-      id: 'zones',
-      name: 'Configuración de Zonas',
-      icon: Settings,
-      path: '/warehouse/zones'
+      id: 'map',
+      name: 'Mapa del Almacén',
+      icon: Map,
+      path: '/warehouse/map'
     },
     {
       id: 'analytics',
@@ -54,7 +84,7 @@ export function WarehouseLayout() {
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 relative">
       {/* Header */}
       <div className="bg-white shadow-sm border-b border-gray-200">
         <div className="px-6 py-4">
@@ -95,19 +125,45 @@ export function WarehouseLayout() {
             })}
           </nav>
         </div>
+        {isWarehouseClosed && (
+          <div className="border-t border-b border-amber-300 bg-amber-100">
+            <div className="px-6 py-3 flex items-center justify-between text-amber-800">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5" />
+                <span className="font-medium">Almacén cerrado</span>
+                <span className="text-sm">Las operaciones están temporalmente bloqueadas.</span>
+              </div>
+              <span className="text-xs">Modifica en Configuración General</span>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Content */}
-      <div className="flex-1">
+      <div className="flex-1 relative">
         <Routes>
           <Route path="map" element={<WarehouseMap />} />
           <Route path="warehouses" element={<Warehouses />} />
-          <Route path="locations" element={<WarehouseLocations />} />
           <Route path="zones" element={<ZoneConfiguration />} />
+          <Route path="aisles" element={<AislesManagement />} />
+          <Route path="racks" element={<RacksManagement />} />
+          <Route path="locations" element={<WarehouseLocations />} />
           <Route path="analytics" element={<WarehouseAnalytics />} />
           <Route path="capacity" element={<CapacityManagement />} />
           <Route path="" element={<WarehouseMap />} />
         </Routes>
+        {isWarehouseClosed && (
+          <div className="absolute inset-0 z-40 bg-black/30 backdrop-blur-sm flex items-center justify-center">
+            <div className="bg-white rounded-lg shadow p-5 border border-amber-300 max-w-md text-center">
+              <div className="flex items-center justify-center gap-2 text-amber-800 mb-1">
+                <AlertTriangle className="w-5 h-5" />
+                <span className="font-semibold">Almacén cerrado</span>
+              </div>
+              <p className="text-sm text-amber-700">La interacción con el módulo está deshabilitada.</p>
+              <p className="text-xs text-gray-500 mt-2">Puedes reabrir el almacén en Configuración General.</p>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -116,16 +172,6 @@ export function WarehouseLayout() {
 // Placeholder components for future implementation
 function WarehouseAnalytics() {
   type Warehouse = { id: string; name: string; code: string; is_active: boolean };
-  type Location = {
-    id: string;
-    warehouse_id: string | null;
-    code: string;
-    name: string | null;
-    zone: string | null;
-    capacity: number | null;
-    is_active: boolean | null;
-    location_type: string | null;
-  };
 
   const [warehouses, setWarehouses] = useState<Warehouse[]>([]);
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<string>('');
@@ -156,8 +202,9 @@ function WarehouseAnalytics() {
         const firstId = (dbWarehouses || [])[0]?.id || '';
         setSelectedWarehouseId(firstId);
         if (firstId) await loadAnalytics(firstId);
-      } catch (e: any) {
-        console.error('Error cargando Analytics:', e);
+      } catch (e: unknown) {
+        const message = e instanceof Error ? e.message : 'Error desconocido';
+        console.error('Error cargando Analytics:', message);
         setError('No se pudo cargar el análisis de ocupación');
       } finally {
         setLoading(false);
@@ -190,10 +237,17 @@ function WarehouseAnalytics() {
         .in('location_id', locationIds.length ? locationIds : ['00000000-0000-0000-0000-000000000000']);
       if (invErr) throw invErr;
 
+      type InvRow = {
+        location_id: string | null;
+        quantity: number | null;
+        reserved_quantity: number | null;
+        available_quantity: number | null;
+      };
       const byLocation = new Map<string, { qty: number; avail: number }>();
-      (invRows || []).forEach((r: any) => {
-        const prev = byLocation.get(r.location_id) || { qty: 0, avail: 0 };
-        byLocation.set(r.location_id, { qty: prev.qty + (r.quantity || 0), avail: prev.avail + (r.available_quantity || 0) });
+      (invRows || []).forEach((r: InvRow) => {
+        const locId = r.location_id ?? '';
+        const prev = byLocation.get(locId) || { qty: 0, avail: 0 };
+        byLocation.set(locId, { qty: prev.qty + (r.quantity || 0), avail: prev.avail + (r.available_quantity || 0) });
       });
 
       const totalOccupied = activeLocations.reduce((sum, l) => sum + (byLocation.get(l.id)?.avail || 0), 0);
@@ -225,8 +279,8 @@ function WarehouseAnalytics() {
       const maintenanceCount = (allLocations || []).filter(l => !l.is_active || (l.location_type || '').toLowerCase() === 'quarantine').length;
 
       // Eficiencia estimada: disponibilidad efectiva sobre cantidad total registrada
-      const totalQty = (invRows || []).reduce((s, r: any) => s + (r.quantity || 0), 0);
-      const totalAvail = (invRows || []).reduce((s, r: any) => s + (r.available_quantity || 0), 0);
+      const totalQty = (invRows || []).reduce((s, r: InvRow) => s + (r.quantity || 0), 0);
+      const totalAvail = (invRows || []).reduce((s, r: InvRow) => s + (r.available_quantity || 0), 0);
       const efficiencyPct = totalQty > 0 ? (totalAvail / totalQty) * 100 : 0;
 
       setMetrics({
@@ -236,15 +290,16 @@ function WarehouseAnalytics() {
         efficiency: efficiencyPct,
       });
       setZoneStats(zonesArray);
-    } catch (e: any) {
-      console.error('Error calculando analytics:', e);
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : 'Error desconocido';
+      console.error('Error calculando analytics:', message);
       setError('No se pudo calcular métricas de ocupación');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleWarehouseChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleWarehouseChange = async (e: ChangeEvent<HTMLSelectElement>) => {
     const id = e.target.value;
     setSelectedWarehouseId(id);
     if (id) await loadAnalytics(id);
@@ -261,6 +316,7 @@ function WarehouseAnalytics() {
               className="border border-gray-300 rounded px-2 py-1 text-sm"
               value={selectedWarehouseId}
               onChange={handleWarehouseChange}
+              disabled={loading || warehouses.length === 0}
             >
               {warehouses.map(w => (
                 <option key={w.id} value={w.id}>{w.name}</option>

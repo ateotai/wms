@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   Package, 
   Truck, 
@@ -21,66 +21,33 @@ interface ActivityItem {
   priority?: 'low' | 'medium' | 'high' | 'critical';
 }
 
-const activityData: ActivityItem[] = [
-  {
-    id: '1',
-    type: 'inbound',
-    title: 'Recepción completada',
-    description: 'PO-2024-001 - 150 unidades recibidas',
-    user: 'María García',
-    location: 'Muelle A-1',
-    timestamp: '2 min',
-    priority: 'medium'
-  },
-  {
-    id: '2',
-    type: 'picking',
-    title: 'Picking en progreso',
-    description: 'Ola W-240115 - 23 órdenes asignadas',
-    user: 'Carlos López',
-    location: 'Zona A',
-    timestamp: '5 min',
-    priority: 'high'
-  },
-  {
-    id: '3',
-    type: 'alert',
-    title: 'Stock bajo detectado',
-    description: 'SKU-12345 - Solo 5 unidades disponibles',
-    location: 'A-01-02-03',
-    timestamp: '8 min',
-    priority: 'critical'
-  },
-  {
-    id: '4',
-    type: 'outbound',
-    title: 'Envío preparado',
-    description: 'SO-2024-0892 - Listo para transporte',
-    user: 'Ana Martín',
-    location: 'Muelle B-2',
-    timestamp: '12 min',
-    priority: 'medium'
-  },
-  {
-    id: '5',
-    type: 'completed',
-    title: 'Reconteo completado',
-    description: 'Zona C - 98.5% de precisión',
-    user: 'Pedro Ruiz',
-    location: 'Zona C',
-    timestamp: '15 min',
-    priority: 'low'
-  },
-  {
-    id: '6',
-    type: 'pending',
-    title: 'Reposición pendiente',
-    description: '12 tareas de reabastecimiento',
-    location: 'Múltiples zonas',
-    timestamp: '18 min',
-    priority: 'medium'
-  }
-];
+// Estado para datos reales
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL;
+
+export function RecentActivity() {
+  const [items, setItems] = useState<ActivityItem[]>([]);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchItems = async () => {
+      if (!AUTH_BACKEND_URL) return;
+      setLoading(true);
+      setError(null);
+      try {
+        const resp = await fetch(`${AUTH_BACKEND_URL}/activity/recent`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        setItems(data.items || []);
+      } catch (e: any) {
+        console.error('Error cargando actividad reciente:', e);
+        setError(e?.message || 'No se pudo cargar la actividad');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchItems();
+  }, []);
 
 function getActivityIcon(type: ActivityItem['type']) {
   switch (type) {
@@ -126,41 +93,44 @@ function getPriorityBadge(priority?: ActivityItem['priority']) {
   );
 }
 
-export function RecentActivity() {
-  return (
-    <div className="bg-white rounded-lg shadow-sm border border-gray-200">
-      <div className="px-6 py-4 border-b border-gray-200">
-        <h3 className="text-lg font-semibold text-gray-900">Actividad Reciente</h3>
-        <p className="text-sm text-gray-500">Últimas operaciones del almacén</p>
-      </div>
-      
+  const renderBody = () => {
+    if (!AUTH_BACKEND_URL) {
+      return <p className="text-sm text-gray-600">Configura `VITE_AUTH_BACKEND_URL` en .env</p>;
+    }
+    if (loading) {
+      return <p className="text-sm text-gray-600">Cargando actividad…</p>;
+    }
+    if (error) {
+      return <p className="text-sm text-red-600">{error}</p>;
+    }
+    if (!items || items.length === 0) {
+      return <p className="text-sm text-gray-600">Sin datos recientes</p>;
+    }
+
+    return (
       <div className="divide-y divide-gray-200">
-        {activityData.map((activity) => {
+        {items.map((activity) => {
           const Icon = getActivityIcon(activity.type);
           const colorClass = getActivityColor(activity.type, activity.priority);
-          
           return (
             <div key={activity.id} className="px-6 py-4 hover:bg-gray-50 transition-colors">
               <div className="flex items-start space-x-3">
                 <div className={`flex-shrink-0 p-2 rounded-lg border ${colorClass}`}>
                   <Icon className="w-4 h-4" />
                 </div>
-                
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between">
-                    <p className="text-sm font-medium text-gray-900 truncate">
-                      {activity.title}
-                    </p>
+                    <p className="text-sm font-medium text-gray-900 truncate">{activity.title}</p>
                     <div className="flex items-center space-x-2">
                       {getPriorityBadge(activity.priority)}
-                      <span className="text-xs text-gray-500">{activity.timestamp}</span>
+                      {activity.timestamp && (
+                        <span className="text-xs text-gray-500">{activity.timestamp}</span>
+                      )}
                     </div>
                   </div>
-                  
-                  <p className="text-sm text-gray-600 mt-1">
-                    {activity.description}
-                  </p>
-                  
+                  {activity.description && (
+                    <p className="text-sm text-gray-600 mt-1">{activity.description}</p>
+                  )}
                   <div className="flex items-center space-x-4 mt-2 text-xs text-gray-500">
                     {activity.user && (
                       <div className="flex items-center space-x-1">
@@ -181,6 +151,17 @@ export function RecentActivity() {
           );
         })}
       </div>
+    );
+  };
+
+  return (
+    <div className="bg-white rounded-lg shadow-sm border border-gray-200">
+      <div className="px-6 py-4 border-b border-gray-200">
+        <h3 className="text-lg font-semibold text-gray-900">Actividad Reciente</h3>
+        <p className="text-sm text-gray-500">Últimas operaciones del almacén</p>
+      </div>
+      
+      {renderBody()}
       
       <div className="px-6 py-3 bg-gray-50 border-t border-gray-200">
         <button className="text-sm text-blue-600 hover:text-blue-800 font-medium">

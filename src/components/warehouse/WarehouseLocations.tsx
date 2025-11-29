@@ -1,4 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
+import type { FormEvent } from 'react';
 import { Plus, MapPin, Package, Settings, Filter, RefreshCw } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
@@ -55,6 +56,10 @@ export function WarehouseLocations() {
     code: '',
     name: '',
     zone: '',
+    aisle: '',
+    rack: '',
+    shelf: '',
+    bin: '',
     location_type: 'storage' as Location['location_type'],
     capacity: 100,
     is_active: true,
@@ -84,15 +89,27 @@ export function WarehouseLocations() {
             .from('zones')
             .select('code, name, zone_type, is_active');
           if (!zonesError && dbZones) {
-            setZones(dbZones as Zone[]);
+            type DBZoneListItem = {
+              code: string;
+              name: string | null;
+              zone_type: 'receiving' | 'storage' | 'picking' | 'packing' | 'shipping' | 'cross_dock';
+              is_active: boolean | null;
+            };
+            const uiZones: Zone[] = (dbZones as DBZoneListItem[]).map((z) => ({
+              code: z.code,
+              name: z.name,
+              zone_type: z.zone_type,
+              is_active: z.is_active,
+            }));
+            setZones(uiZones);
           }
-        } catch (e) {
+        } catch {
           // Ignorar si no existe la tabla de zonas; el formulario seguirá permitiendo texto libre
           console.warn('Tabla zones no disponible, usando entrada libre para zona');
         }
 
         await loadLocations(dbWarehouses && dbWarehouses[0] ? dbWarehouses[0].id : undefined);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('Error cargando Ubicaciones:', err);
         setError('Error al cargar datos. Verifica autenticación y políticas RLS.');
       } finally {
@@ -128,7 +145,7 @@ export function WarehouseLocations() {
       }
       const data = await resp.json();
       setLocations((data && data.locations) || []);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error cargando locations:', err);
       setError('No se pudieron cargar ubicaciones');
     } finally {
@@ -182,30 +199,46 @@ export function WarehouseLocations() {
       }
       await loadLocations(selectedWarehouseId);
       setEditingId(null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error actualizando ubicación:', err);
-      const msg = (err?.message || err?.error || '').toString();
+      const maybe = (err && typeof err === 'object') ? (err as { message?: unknown; error?: unknown }) : undefined;
+      const msg = maybe?.message ? String(maybe.message) : maybe?.error ? String(maybe.error) : '';
       setError(msg ? `No se pudo actualizar: ${msg}` : 'No se pudo actualizar la ubicación');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCreateLocation = async (e: React.FormEvent) => {
+  const handleCreateLocation = async (e: FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError(null);
     try {
-      if (!form.warehouse_id || !form.code) {
-        setError('Selecciona almacén y define un código');
+      if (!form.warehouse_id) {
+        setError('Selecciona un almacén');
+        setLoading(false);
+        return;
+      }
+      const rawCode = (form.code || '').trim();
+      const composed = [form.zone, form.aisle, form.rack, form.shelf, form.bin]
+        .map((p) => String(p || '').trim())
+        .filter(Boolean)
+        .join('-');
+      const finalCode = rawCode || composed;
+      if (!finalCode) {
+        setError('Define un código o completa Zona, Pasillo, Rack, Nivel y Posición');
         setLoading(false);
         return;
       }
       const payload = {
         warehouse_id: form.warehouse_id,
-        code: form.code,
-        name: form.name || form.code,
+        code: finalCode,
+        name: form.name || finalCode,
         zone: form.zone || null,
+        aisle: form.aisle || null,
+        rack: form.rack || null,
+        shelf: form.shelf || null,
+        bin: form.bin || null,
         location_type: form.location_type || 'storage',
         capacity: form.capacity || 100,
         is_active: form.is_active,
@@ -241,13 +274,18 @@ export function WarehouseLocations() {
         code: '',
         name: '',
         zone: prev.zone,
+        aisle: '',
+        rack: '',
+        shelf: '',
+        bin: '',
         capacity: 100,
         location_type: 'storage',
         is_active: true,
       }));
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error creando ubicación:', err);
-      const msg = (err?.message || err?.error || '').toString();
+      const maybe = (err && typeof err === 'object') ? (err as { message?: unknown; error?: unknown }) : undefined;
+      const msg = maybe?.message ? String(maybe.message) : maybe?.error ? String(maybe.error) : '';
       setError(msg ? `No se pudo crear la ubicación: ${msg}` : 'No se pudo crear la ubicación. Revisa permisos y datos.');
     } finally {
       setLoading(false);
@@ -368,7 +406,7 @@ export function WarehouseLocations() {
                             <label className="block text-xs font-medium text-gray-600 mb-1">Tipo</label>
                             <select
                               value={editForm.location_type || 'storage'}
-                              onChange={(e) => setEditForm((p) => ({ ...p, location_type: e.target.value as any }))}
+                              onChange={(e) => setEditForm((p) => ({ ...p, location_type: e.target.value as 'receiving' | 'storage' | 'picking' | 'shipping' | 'quarantine' }))}
                               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                             >
                               <option value="receiving">receiving</option>
@@ -462,9 +500,9 @@ export function WarehouseLocations() {
                     <input
                       value={form.code}
                       onChange={(e) => setForm((prev) => ({ ...prev, code: e.target.value }))}
-                      placeholder="Ej. A-01-R01-S01"
+                      placeholder="Ej. Z-A01-R01-S01-B01 (Zona-Pasillo-Rack-Nivel-Posición)"
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      required
+                      required={false}
                     />
                   </div>
                   <div>
@@ -499,12 +537,50 @@ export function WarehouseLocations() {
                     />
                   )}
                 </div>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Pasillo</label>
+                    <input
+                      value={form.aisle}
+                      onChange={(e) => setForm((prev) => ({ ...prev, aisle: e.target.value }))}
+                      placeholder="Ej. A-01"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Rack</label>
+                    <input
+                      value={form.rack}
+                      onChange={(e) => setForm((prev) => ({ ...prev, rack: e.target.value }))}
+                      placeholder="Ej. R01"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Nivel</label>
+                    <input
+                      value={form.shelf}
+                      onChange={(e) => setForm((prev) => ({ ...prev, shelf: e.target.value }))}
+                      placeholder="Ej. S01"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">Bin</label>
+                    <input
+                      value={form.bin}
+                      onChange={(e) => setForm((prev) => ({ ...prev, bin: e.target.value }))}
+                      placeholder="Ej. B01"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    />
+                  </div>
+                </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">Tipo</label>
                     <select
                       value={form.location_type || 'storage'}
-                      onChange={(e) => setForm((prev) => ({ ...prev, location_type: e.target.value as any }))}
+                      onChange={(e) => setForm((prev) => ({ ...prev, location_type: e.target.value as 'receiving' | 'storage' | 'picking' | 'shipping' | 'quarantine' }))}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     >
                       <option value="receiving">receiving</option>

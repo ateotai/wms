@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { 
   Truck, 
-  Calendar, 
   Package, 
   MapPin, 
   Eye, 
@@ -11,9 +10,7 @@ import {
   X,
   Plus,
   Search,
-  Filter,
-  FileText,
-  User
+  Filter
 } from 'lucide-react';
 
 interface ASNItem {
@@ -154,7 +151,7 @@ export const ASNManagement: React.FC = () => {
     try {
       const saved = localStorage.getItem('asnList');
       return saved ? JSON.parse(saved) : defaultAsns;
-    } catch (e) {
+    } catch {
       return defaultAsns;
     }
   });
@@ -162,8 +159,8 @@ export const ASNManagement: React.FC = () => {
   useEffect(() => {
     try {
       localStorage.setItem('asnList', JSON.stringify(asns));
-    } catch (e) {
-      // Ignorar errores de almacenamiento
+    } catch {
+      void 0;
     }
   }, [asns]);
 

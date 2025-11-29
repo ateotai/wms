@@ -1,6 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Edit, Eye, MoreVertical, Package, MapPin, Calendar, AlertCircle } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { formatCurrency } from '../../utils/currency';
+
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
 
 interface InventoryListProps {
   searchTerm: string;
@@ -28,6 +31,33 @@ interface InventoryItem {
   serialNumbers: string[];
 }
 
+// Tipos locales para filas devueltas por la consulta de supabase
+type ProductRow = {
+  id: string;
+  sku: string;
+  name: string;
+  cost_price?: number | null;
+  selling_price?: number | null;
+  min_stock_level?: number | null;
+  reorder_point?: number | null;
+  is_active?: boolean | null;
+  categories?: { name?: string | null } | null;
+};
+
+type LocationRow = {
+  code: string;
+  name?: string | null;
+};
+
+type InventoryRow = {
+  id: string;
+  quantity?: number | null;
+  reserved_quantity?: number | null;
+  last_counted_at?: string | null;
+  products: ProductRow;
+  locations: LocationRow;
+};
+
 export function InventoryList({ searchTerm, filterCategory }: InventoryListProps) {
   const [sortBy, setSortBy] = useState<'sku' | 'name' | 'quantity' | 'value'>('sku');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
@@ -40,67 +70,192 @@ export function InventoryList({ searchTerm, filterCategory }: InventoryListProps
       setLoading(true);
       setError(null);
 
-      // Obtener inventario con información de productos y ubicaciones
-      const { data: inventoryData, error: inventoryError } = await supabase
-        .from('inventory')
-        .select(`
-          id,
-          quantity,
-          reserved_quantity,
-          last_counted_at,
-          products!inner(
+      let transformedInventory: InventoryItem[] = [];
+
+      // 1) Preferir backend con service-role: /inventory/list
+      if (AUTH_BACKEND_URL) {
+        try {
+          const token = localStorage.getItem('app_token');
+          const url = `${AUTH_BACKEND_URL}/inventory/list?q=${encodeURIComponent(searchTerm)}`;
+          const resp = await fetch(url, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {}
+          });
+          if (resp.ok) {
+            const json = await resp.json();
+            const rows = Array.isArray(json.inventory) ? json.inventory : [];
+            transformedInventory = rows.map((r: any) => {
+              const quantity = Number(r.quantity ?? 0);
+              const reserved = Number(r.reserved_quantity ?? r.reservedQuantity ?? 0);
+              const available = Number(
+                r.available_quantity ?? r.availableQuantity ?? quantity - reserved
+              );
+              const unitCost = Number(r.unit_cost ?? r.products?.cost_price ?? 0);
+              const totalValue = quantity * unitCost;
+              return {
+                id: String(r.id),
+                productId: String(r.product_id ?? r.productId ?? ''),
+                sku: String(r.sku ?? r.products?.sku ?? ''),
+                name: String(r.name ?? r.products?.name ?? 'Producto'),
+                category: r.category ?? r.products?.categories?.name ?? 'Sin categoría',
+                quantity,
+                reservedQuantity: reserved,
+                availableQuantity: available,
+                unitCost,
+                totalValue,
+                location: String(r.location_code ?? r.locations?.code ?? '—'),
+                minStock: Number(r.min_stock_level ?? r.products?.min_stock_level ?? 0),
+                maxStock: (r.min_stock_level ?? r.products?.min_stock_level)
+                  ? Number(r.min_stock_level ?? r.products?.min_stock_level) * 5
+                  : 100,
+                reorderPoint: Number(r.reorder_point ?? r.products?.reorder_point ?? 0),
+                lastMovement: r.last_movement_at ? new Date(r.last_movement_at) : new Date(),
+                expiryDate: undefined,
+                batchNumber: undefined,
+                serialNumbers: []
+              } as InventoryItem;
+            });
+          }
+        } catch (e) {
+          console.warn('Backend inventario no disponible, usando supabase:', e);
+        }
+      }
+
+      // 2) Fallback: Supabase directo si backend no dio datos
+      if (transformedInventory.length === 0) {
+        const { data: inventoryData, error: inventoryError } = await supabase
+          .from('inventory')
+          .select(`
             id,
-            sku,
-            name,
-            cost_price,
-            selling_price,
-            min_stock_level,
-            reorder_point,
-            is_active,
-            categories(name)
-          ),
-          locations!inner(
-            code,
-            name
-          )
-        `)
-        .eq('products.is_active', true);
+            quantity,
+            reserved_quantity,
+            available_quantity,
+            last_movement_at,
+            products!inner(
+              id,
+              sku,
+              name,
+              cost_price,
+              selling_price,
+              min_stock_level,
+              reorder_point,
+              is_active,
+              categories(name)
+            ),
+            locations(
+              code,
+              name
+            )
+          `)
+          .eq('products.is_active', true);
 
-      if (inventoryError) throw inventoryError;
+        if (!inventoryError) {
+          const rows: InventoryRow[] = Array.isArray(inventoryData)
+            ? (inventoryData as unknown as InventoryRow[])
+            : [];
+          transformedInventory = rows.map((item) => {
+            const product = (item as any).products;
+            const location = (item as any).locations;
+            const quantity = Number((item as any).quantity ?? 0);
+            const reservedQuantity = Number((item as any).reserved_quantity ?? 0);
+            const availableQuantity = Number(
+              (item as any).available_quantity ?? quantity - reservedQuantity
+            );
+            const unitCost = Number(product?.cost_price ?? 0);
+            const totalValue = quantity * unitCost;
+            return {
+              id: (item as any).id,
+              productId: product?.id,
+              sku: product?.sku,
+              name: product?.name,
+              category: product?.categories?.name ?? 'Sin categoría',
+              quantity,
+              reservedQuantity,
+              availableQuantity,
+              unitCost,
+              totalValue,
+              location: location?.code ?? '—',
+              minStock: Number(product?.min_stock_level ?? 0),
+              maxStock: product?.min_stock_level ? Number(product?.min_stock_level) * 5 : 100,
+              reorderPoint: Number(product?.reorder_point ?? product?.min_stock_level ?? 0),
+              lastMovement: new Date((item as any).last_movement_at ?? new Date()),
+              expiryDate: undefined,
+              batchNumber: undefined,
+              serialNumbers: []
+            };
+          });
+        }
+      }
 
-      // Transformar datos al formato esperado
-      const transformedInventory: InventoryItem[] = inventoryData?.map(item => {
-        const product = item.products;
-        const location = item.locations;
-        const quantity = item.quantity || 0;
-        const reservedQuantity = item.reserved_quantity || 0;
-        const availableQuantity = quantity - reservedQuantity;
-        const unitCost = product.cost_price || 0;
-        const totalValue = quantity * unitCost;
+      // 3) Último fallback: catálogo si sigue vacío (para desarrollo sin sesión)
+      if (transformedInventory.length === 0 && AUTH_BACKEND_URL) {
+        try {
+          const token = localStorage.getItem('app_token');
+          const resp = await fetch(`${AUTH_BACKEND_URL}/products/list?q=${encodeURIComponent(searchTerm)}`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {}
+          });
+          if (resp.ok) {
+            const json = await resp.json();
+            const prods = Array.isArray(json.products) ? json.products : [];
+            transformedInventory = prods.map((p: any) => ({
+              id: String(p.id),
+              productId: String(p.id),
+              sku: String(p.sku || ''),
+              name: String(p.name || 'Producto'),
+              category: p.categories?.name ?? 'Sin categoría',
+              quantity: 0,
+              reservedQuantity: 0,
+              availableQuantity: 0,
+              unitCost: Number(p.cost_price ?? 0),
+              totalValue: 0,
+              location: '—',
+              minStock: Number(p.min_stock_level ?? 0),
+              maxStock: p.min_stock_level ? Number(p.min_stock_level) * 5 : 100,
+              reorderPoint: Number(p.reorder_point ?? p.min_stock_level ?? 0),
+              lastMovement: new Date(),
+              expiryDate: undefined,
+              batchNumber: undefined,
+              serialNumbers: []
+            }));
+          }
+        } catch (e) {
+          console.warn('Fallback productos no disponible:', e);
+        }
+      }
 
-        return {
-          id: item.id,
-          productId: product.id,
-          sku: product.sku,
-          name: product.name,
-          category: product.categories?.name || 'Sin categoría',
-          quantity,
-          reservedQuantity,
-          availableQuantity,
-          unitCost,
-          totalValue,
-          location: location.code,
-          minStock: product.min_stock_level || 0,
-          maxStock: product.min_stock_level ? product.min_stock_level * 5 : 100, // Estimación
-          reorderPoint: product.reorder_point || product.min_stock_level || 0,
-          lastMovement: new Date(item.last_counted_at || new Date()),
-          expiryDate: undefined,
-          batchNumber: undefined,
-          serialNumbers: []
-        };
-      }) || [];
+      // Agregar: agrupar por SKU (o productId) para sumar cantidades
+      const aggregateBySku = (items: InventoryItem[]): InventoryItem[] => {
+        const map = new Map<string, InventoryItem>();
+        for (const it of items) {
+          const key = it.sku || it.productId || it.id;
+          const existing = map.get(key);
+          if (!existing) {
+            // Usar clave estable como id para evitar duplicados en la tabla
+            map.set(key, { ...it, id: key });
+          } else {
+            const lastMovement = new Date(
+              Math.max(existing.lastMovement.getTime(), it.lastMovement.getTime())
+            );
+            map.set(key, {
+              ...existing,
+              quantity: existing.quantity + it.quantity,
+              reservedQuantity: existing.reservedQuantity + it.reservedQuantity,
+              availableQuantity: existing.availableQuantity + it.availableQuantity,
+              totalValue: existing.totalValue + it.totalValue,
+              // Si hay ubicaciones distintas, mostrar '—' para indicar múltiple/no específica
+              location:
+                existing.location === it.location ? existing.location : '—',
+              // Mantener mínimos/puntos de pedido del producto (asumidos iguales por SKU)
+              minStock: Math.max(existing.minStock, it.minStock),
+              reorderPoint: Math.max(existing.reorderPoint, it.reorderPoint),
+              lastMovement,
+            });
+          }
+        }
+        return Array.from(map.values());
+      };
 
-      setInventory(transformedInventory);
+      const aggregatedInventory = aggregateBySku(transformedInventory);
+      setInventory(aggregatedInventory);
 
     } catch (err) {
       console.error('Error fetching inventory data:', err);
@@ -177,7 +332,8 @@ export function InventoryList({ searchTerm, filterCategory }: InventoryListProps
 
   useEffect(() => {
     fetchInventoryData();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchTerm]);
 
   const filteredInventory = inventory.filter(item => {
     const matchesSearch = item.sku.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -187,8 +343,9 @@ export function InventoryList({ searchTerm, filterCategory }: InventoryListProps
   });
 
   const sortedInventory = [...filteredInventory].sort((a, b) => {
-    let aValue: any, bValue: any;
-    
+    let aValue: string | number;
+    let bValue: string | number;
+
     switch (sortBy) {
       case 'sku':
         aValue = a.sku;
@@ -210,11 +367,15 @@ export function InventoryList({ searchTerm, filterCategory }: InventoryListProps
         return 0;
     }
 
-    if (typeof aValue === 'string') {
-      return sortOrder === 'asc' ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
-    } else {
+    if (typeof aValue === 'string' && typeof bValue === 'string') {
+      return sortOrder === 'asc'
+        ? aValue.localeCompare(bValue)
+        : bValue.localeCompare(aValue);
+    }
+    if (typeof aValue === 'number' && typeof bValue === 'number') {
       return sortOrder === 'asc' ? aValue - bValue : bValue - aValue;
     }
+    return 0;
   });
 
   const getStockStatus = (item: InventoryItem) => {
@@ -227,14 +388,7 @@ export function InventoryList({ searchTerm, filterCategory }: InventoryListProps
     }
   };
 
-  const handleSort = (field: typeof sortBy) => {
-    if (sortBy === field) {
-      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortBy(field);
-      setSortOrder('asc');
-    }
-  };
+  // La UI usa el select para ordenar; no se necesita manejador adicional
 
   if (loading) {
     return (
@@ -356,7 +510,7 @@ export function InventoryList({ searchTerm, filterCategory }: InventoryListProps
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      €{item.totalValue.toLocaleString('es-ES', { minimumFractionDigits: 2 })}
+                      {formatCurrency(item.totalValue)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center text-sm text-gray-500">

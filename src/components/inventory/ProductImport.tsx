@@ -4,7 +4,21 @@ import { Upload, Download, FileText, X, AlertCircle, CheckCircle } from 'lucide-
 interface ProductImportProps {
   isOpen: boolean;
   onClose: () => void;
-  onImport: (products: any[]) => void;
+  onImport: (products: ImportProductInput[]) => void;
+}
+
+interface ImportProductInput {
+  sku: string;
+  name: string;
+  description: string;
+  unit_of_measure: string;
+  cost_price: number;
+  selling_price: number;
+  min_stock_level: number;
+  max_stock_level: number;
+  reorder_point: number;
+  barcode: string;
+  weight: number;
 }
 
 export function ProductImport({ isOpen, onClose, onImport }: ProductImportProps) {
@@ -158,7 +172,7 @@ export function ProductImport({ isOpen, onClose, onImport }: ProductImportProps)
           continue;
         }
 
-        const product: any = {
+        const product: ImportProductInput = {
           sku,
           name,
           description: values[headers.findIndex(h => h.toLowerCase().includes('descripcion') || h.toLowerCase().includes('description'))] || '',

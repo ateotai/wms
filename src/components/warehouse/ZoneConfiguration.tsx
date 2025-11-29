@@ -1,11 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { 
   Plus, 
   Edit, 
   Trash2, 
   Save, 
   X, 
-  MapPin, 
   Package, 
   Truck, 
   ShoppingCart,
@@ -15,6 +14,7 @@ import {
 
 interface Zone {
   id: string;
+  code?: string;
   name: string;
   type: 'receiving' | 'storage' | 'picking' | 'shipping' | 'returns' | 'staging';
   description: string;
@@ -97,7 +97,8 @@ export function ZoneConfiguration() {
           .select('id, name, code')
           .order('name', { ascending: true });
         if (!whErr && dbWh) {
-          const list = (dbWh as any[]).map(w => ({ id: w.id, name: w.name || w.code || w.id }));
+          type DBWarehouse = { id: string; name: string | null; code: string | null };
+          const list = (dbWh as DBWarehouse[]).map((w) => ({ id: w.id, name: w.name || w.code || w.id }));
           setWarehouses(list);
           if (list.length === 1) setSelectedWarehouseId(list[0].id);
         } else {
@@ -105,7 +106,7 @@ export function ZoneConfiguration() {
             .from('locations')
             .select('warehouse_id')
             .not('warehouse_id', 'is', null);
-          const ids = Array.from(new Set((locs || []).map((l: any) => l.warehouse_id))).filter(Boolean);
+          const ids = Array.from(new Set(((locs || []) as { warehouse_id: string | null }[]).map((l) => l.warehouse_id))).filter(Boolean) as string[];
           const list = ids.map((id: string) => ({ id, name: id }));
           setWarehouses(list);
           if (list.length === 1) setSelectedWarehouseId(list[0].id);
@@ -135,8 +136,8 @@ export function ZoneConfiguration() {
           temperature_controlled: boolean | null;
           temperature_min: number | null;
           temperature_max: number | null;
-          dimensions: any | null;
-          coordinates: any | null;
+          dimensions: { length: number; width: number; height: number } | null;
+          coordinates: { x: number; y: number } | null;
           created_at: string;
           updated_at: string;
         };
@@ -153,6 +154,7 @@ export function ZoneConfiguration() {
         if (!zonesError && dbZones) {
           const uiZones: Zone[] = (dbZones as DBZone[]).map((z) => ({
             id: z.id,
+            code: z.code,
             name: z.name,
             type: (z.zone_type === 'packing' ? 'staging' : (z.zone_type as Zone['type'])) || 'storage',
             description: z.description || '',
@@ -228,7 +230,7 @@ export function ZoneConfiguration() {
         });
 
         setZones(derivedZones);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('Error cargando zonas:', err);
         setError('Error al cargar zonas desde la base de datos');
       } finally {
@@ -251,6 +253,7 @@ export function ZoneConfiguration() {
     // Alta de zonas reales debería crear etiquetas/atributos sobre locations
     setEditingZone(null);
     setFormData({
+      code: '',
       name: '',
       type: 'storage',
       description: '',
@@ -273,6 +276,23 @@ export function ZoneConfiguration() {
       .replace(/^-+|-+$/g, '');
   };
 
+  const generateZonePrefix = (name: string) => {
+    const base = (name || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .replace(/[^A-Z]/g, '');
+    if (base.length >= 3) return base.slice(0, 3);
+    const words = (name || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .match(/[A-Z]+/g) || [];
+    const initials = words.map(w => w[0]).join('');
+    const candidate = (initials + base).slice(0, 3);
+    return (candidate.padEnd(3, 'X')).slice(0, 3);
+  };
+
   const handleSave = async () => {
     try {
       if (!formData.name || formData.name.trim() === '') {
@@ -285,14 +305,33 @@ export function ZoneConfiguration() {
       }
 
       if (usingZonesTable) {
-        const code = normalizeCode(formData.name);
+        let code = (formData.code || '').toUpperCase();
+        if (!code || !/^[A-Z]{3}$/.test(code)) {
+          code = generateZonePrefix(formData.name || '');
+        }
         // Mapear tipo de zona de la UI al esquema permitido en BD
         const dbZoneType = (formData.type === 'staging')
           ? 'packing'
           : (formData.type === 'returns')
           ? 'cross_dock'
           : (formData.type || 'storage');
-        const payload: any = {
+        const payload: {
+          id?: string;
+          created_at?: string;
+          updated_at?: string;
+          name: string;
+          code: string;
+          zone_type: 'receiving' | 'storage' | 'picking' | 'packing' | 'shipping' | 'cross_dock';
+          description: string;
+          capacity: number;
+          is_active: boolean;
+          temperature_controlled: boolean;
+          temperature_min: number | null;
+          temperature_max: number | null;
+          dimensions: { length: number; width: number; height: number };
+          coordinates: { x: number; y: number };
+          warehouse_id: string | null;
+        } = {
           name: formData.name,
           code,
           zone_type: dbZoneType,
@@ -326,6 +365,35 @@ export function ZoneConfiguration() {
           payload.updated_at = inserted?.updated_at;
         }
 
+        // Si se está editando y el prefijo cambió, ofrecer actualización en cascada de ubicaciones
+        if (editingZone) {
+          const oldCode = (editingZone.code || '').toUpperCase();
+          const newCode = (code || '').toUpperCase();
+          if (oldCode && newCode && oldCode !== newCode) {
+            const confirmCascade = confirm(
+              `Has cambiado el prefijo de la zona de "${oldCode}" a "${newCode}".\n\n` +
+              `¿Quieres actualizar en cascada todas las ubicaciones del almacén asociadas a la zona "${oldCode}" para que usen "${newCode}"?\n` +
+              `Esta acción modificará el campo Zona (locations.zone).`
+            );
+            if (confirmCascade) {
+              try {
+                let updateQuery = supabase
+                  .from('locations')
+                  .update({ zone: newCode })
+                  .eq('zone', oldCode);
+                if (formWarehouseId) {
+                  updateQuery = updateQuery.eq('warehouse_id', formWarehouseId);
+                }
+                const { error: updLocErr } = await updateQuery;
+                if (updLocErr) throw updLocErr;
+              } catch (cascadeErr) {
+                console.error('Error en actualización en cascada de ubicaciones:', cascadeErr);
+                setError('La zona se guardó, pero no se pudo actualizar las ubicaciones en cascada. Verifica permisos/RLS.');
+              }
+            }
+          }
+        }
+
         // Refrescar listado desde BD
         let refreshQuery = supabase
           .from('zones')
@@ -335,8 +403,9 @@ export function ZoneConfiguration() {
           refreshQuery = refreshQuery.eq('warehouse_id', selectedWarehouseId);
         }
         const { data: dbZones } = await refreshQuery;
-        const uiZones: Zone[] = (dbZones || []).map((z: any) => ({
+        const uiZones: Zone[] = (((dbZones ?? []) as unknown) as DBZone[]).map((z) => ({
           id: z.id,
+          code: z.code,
           name: z.name,
           type: (z.zone_type === 'packing' ? 'staging' : z.zone_type) || 'storage',
           description: z.description || '',
@@ -360,9 +429,10 @@ export function ZoneConfiguration() {
       setFormData({});
       setFormWarehouseId(null);
       setError(null);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error guardando zona:', err);
-      const msg = (err?.message || err?.error || '').toString();
+      const maybe = (err && typeof err === 'object') ? (err as { message?: unknown; error?: unknown }) : undefined;
+      const msg = maybe?.message ? String(maybe.message) : maybe?.error ? String(maybe.error) : '';
       setError(msg ? `No se pudo guardar la zona: ${msg}` : 'No se pudo guardar la zona. Verifica políticas RLS y existencia de la tabla zones.');
     }
   };
@@ -381,7 +451,7 @@ export function ZoneConfiguration() {
         .eq('id', zoneId);
       if (delError) throw delError;
       setZones(zones.filter(z => z.id !== zoneId));
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('Error eliminando zona:', err);
       setError('No se pudo eliminar la zona. Verifica políticas RLS.');
     }
@@ -460,6 +530,9 @@ export function ZoneConfiguration() {
                   <div>
                     <h3 className="text-lg font-semibold text-gray-900">{zone.name}</h3>
                     <p className="text-sm text-gray-500">{typeInfo.label}</p>
+                    {zone.code && (
+                      <p className="text-xs text-gray-500 mt-0.5">Prefijo: {zone.code}</p>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center space-x-1">
@@ -576,10 +649,37 @@ export function ZoneConfiguration() {
                   <input
                     type="text"
                     value={formData.name || ''}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    onChange={(e) => {
+                      const name = e.target.value;
+                      setFormData((prev) => {
+                        const currentCode = (prev.code || '').toUpperCase();
+                        const auto = generateZonePrefix(prev.name || '');
+                        const shouldAuto = !currentCode || currentCode === auto;
+                        const nextCode = shouldAuto ? generateZonePrefix(name) : currentCode;
+                        return { ...prev, name, code: nextCode };
+                      });
+                    }}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500"
                     placeholder="Ej: Zona de Recepción A"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Prefijo de Zona (3 letras)
+                  </label>
+                  <input
+                    type="text"
+                    value={(formData.code || '').toUpperCase()}
+                    onChange={(e) => {
+                      const raw = e.target.value.toUpperCase();
+                      const onlyLetters = raw.replace(/[^A-Z]/g, '').slice(0, 3);
+                      setFormData({ ...formData, code: onlyLetters });
+                    }}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="Ej: REC, ALM, PKG"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">Se usa en el campo Zona de las ubicaciones.</p>
                 </div>
 
                 <div>
@@ -588,7 +688,7 @@ export function ZoneConfiguration() {
                   </label>
                   <select
                     value={formData.type || 'storage'}
-                    onChange={(e) => setFormData({ ...formData, type: e.target.value as any })}
+                    onChange={(e) => setFormData({ ...formData, type: e.target.value as Zone['type'] })}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500"
                   >
                     {zoneTypes.map((type) => (
@@ -632,7 +732,7 @@ export function ZoneConfiguration() {
                   </label>
                   <select
                     value={formData.status || 'active'}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
+                    onChange={(e) => setFormData({ ...formData, status: e.target.value as Zone['status'] })}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500"
                   >
                     {statusOptions.map((status) => (
@@ -734,7 +834,7 @@ export function ZoneConfiguration() {
                   </label>
                   <select
                     value={formData.temperature || 'ambient'}
-                    onChange={(e) => setFormData({ ...formData, temperature: e.target.value as any })}
+                    onChange={(e) => setFormData({ ...formData, temperature: e.target.value as Zone['temperature'] })}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 focus:ring-blue-500 focus:border-blue-500"
                   >
                     {temperatureOptions.map((temp) => (

@@ -9,15 +9,11 @@ import {
   Mail, 
   Globe,
   Package,
-  Calendar,
   BarChart3,
-  TrendingUp,
   AlertTriangle,
   CheckCircle,
   Plus,
   Edit,
-  Trash2,
-  Eye,
   Settings,
   User
 } from 'lucide-react';
@@ -297,7 +293,7 @@ export function CarrierManagement() {
   const saveCarriersToStorage = (list: Carrier[]) => {
     try {
       localStorage.setItem(CARRIERS_KEY, JSON.stringify(list));
-    } catch {}
+    } catch { void 0; }
   };
 
   useEffect(() => {

@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { formatCurrency } from '../../utils/currency';
 import { 
   Package, 
   TrendingUp, 
@@ -51,67 +52,108 @@ function StatCard({ title, value, change, changeType, icon: Icon, color }: StatC
 }
 
 export function DashboardStats() {
+  const [metrics, setMetrics] = useState<any | null>(null);
+  const [loading, setLoading] = useState<boolean>(false);
+
+  const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL;
+
+  useEffect(() => {
+    const fetchMetrics = async () => {
+      if (!AUTH_BACKEND_URL) return;
+      setLoading(true);
+      try {
+        const resp = await fetch(`${AUTH_BACKEND_URL}/metrics/dashboard`);
+        if (resp.ok) {
+          const data = await resp.json();
+          setMetrics(data);
+        }
+      } catch (e) {
+        console.error('Error cargando métricas del dashboard:', e);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchMetrics();
+  }, [AUTH_BACKEND_URL]);
+
+  const toCurrency = (n: number | null | undefined) => {
+    if (typeof n !== 'number') return '—';
+    return formatCurrency(n);
+  };
+  const toPercent = (n: number | null | undefined) => {
+    if (typeof n !== 'number') return '—';
+    return `${n.toFixed(1)}%`;
+  };
+  const toLinesPerHour = (n: number | null | undefined) => {
+    if (typeof n !== 'number') return '—';
+    return `${Math.round(n)} líneas/h`;
+  };
+  const toFactor = (n: number | null | undefined) => {
+    if (typeof n !== 'number') return '—';
+    return `${n.toFixed(1)}x`;
+  };
+
   const stats = [
     {
       title: 'Inventario Total',
-      value: '€2,847,392',
-      change: '+12.5% vs mes anterior',
-      changeType: 'positive' as const,
+      value: toCurrency(metrics?.inventory_total_value),
+      change: loading ? 'Actualizando…' : 'vs mes anterior',
+      changeType: 'neutral' as const,
       icon: Package,
       color: 'bg-blue-500'
     },
     {
       title: 'Precisión Inventario',
-      value: '99.2%',
-      change: '+0.3% vs mes anterior',
-      changeType: 'positive' as const,
+      value: toPercent(metrics?.inventory_accuracy),
+      change: loading ? 'Actualizando…' : 'últimos 30 días',
+      changeType: 'neutral' as const,
       icon: Target,
       color: 'bg-green-500'
     },
     {
       title: 'Órdenes Procesadas',
-      value: '1,247',
-      change: '+8.2% vs ayer',
-      changeType: 'positive' as const,
+      value: typeof metrics?.orders_processed_last_day === 'number' ? metrics.orders_processed_last_day : '—',
+      change: loading ? 'Actualizando…' : 'últimas 24h',
+      changeType: 'neutral' as const,
       icon: CheckCircle,
       color: 'bg-purple-500'
     },
     {
       title: 'Productividad Picking',
-      value: '156 líneas/h',
-      change: '+5.1% vs semana anterior',
-      changeType: 'positive' as const,
+      value: toLinesPerHour(metrics?.picking_productivity_lines_per_hour),
+      change: loading ? 'Actualizando…' : 'hoy',
+      changeType: 'neutral' as const,
       icon: Activity,
       color: 'bg-orange-500'
     },
     {
       title: 'OTIF Performance',
-      value: '94.8%',
-      change: '-1.2% vs mes anterior',
-      changeType: 'negative' as const,
+      value: toPercent(metrics?.otif_percentage),
+      change: loading ? 'Actualizando…' : 'últimos 30 días',
+      changeType: 'neutral' as const,
       icon: Clock,
       color: 'bg-red-500'
     },
     {
       title: 'Rotación Stock',
-      value: '8.4x',
-      change: '+0.6x vs trimestre anterior',
-      changeType: 'positive' as const,
+      value: toFactor(metrics?.stock_rotation_x),
+      change: loading ? 'Actualizando…' : 'últimos 90 días',
+      changeType: 'neutral' as const,
       icon: TrendingUp,
       color: 'bg-indigo-500'
     },
     {
       title: 'Alertas Activas',
-      value: '23',
-      change: '5 críticas',
-      changeType: 'negative' as const,
+      value: typeof metrics?.alerts_active === 'number' ? metrics.alerts_active : '—',
+      change: loading ? 'Actualizando…' : 'stock bajo',
+      changeType: 'neutral' as const,
       icon: AlertTriangle,
       color: 'bg-yellow-500'
     },
     {
       title: 'Operarios Activos',
-      value: '47',
-      change: '12 en picking',
+      value: typeof metrics?.operators_active === 'number' ? metrics.operators_active : '—',
+      change: loading ? 'Actualizando…' : 'usuarios con rol operador',
       changeType: 'neutral' as const,
       icon: Users,
       color: 'bg-gray-500'

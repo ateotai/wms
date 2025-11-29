@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { 
   Clock, 
   AlertTriangle, 
@@ -23,77 +23,32 @@ interface Task {
   status: 'pending' | 'in_progress' | 'overdue';
 }
 
-const pendingTasks: Task[] = [
-  {
-    id: '1',
-    type: 'picking',
-    title: 'Picking Urgente',
-    description: 'Orden SO-2024-0895 - Cliente Premium',
-    priority: 'urgent',
-    assignedTo: 'Carlos López',
-    dueDate: '14:30',
-    estimatedTime: '25 min',
-    location: 'Zona A-B',
-    status: 'in_progress'
-  },
-  {
-    id: '2',
-    type: 'replenishment',
-    title: 'Reposición Automática',
-    description: '8 ubicaciones requieren reabastecimiento',
-    priority: 'high',
-    dueDate: '15:00',
-    estimatedTime: '45 min',
-    location: 'Zonas A, B, C',
-    status: 'pending'
-  },
-  {
-    id: '3',
-    type: 'receiving',
-    title: 'Recepción Programada',
-    description: 'PO-2024-002 - Proveedor ABC Corp',
-    priority: 'medium',
-    assignedTo: 'María García',
-    dueDate: '16:00',
-    estimatedTime: '30 min',
-    location: 'Muelle A-1',
-    status: 'pending'
-  },
-  {
-    id: '4',
-    type: 'count',
-    title: 'Recuento Cíclico',
-    description: 'Zona C - Productos categoría A',
-    priority: 'medium',
-    dueDate: '17:00',
-    estimatedTime: '60 min',
-    location: 'Zona C',
-    status: 'pending'
-  },
-  {
-    id: '5',
-    type: 'picking',
-    title: 'Batch Picking',
-    description: 'Ola W-240115 - 15 órdenes agrupadas',
-    priority: 'high',
-    assignedTo: 'Ana Martín',
-    dueDate: '13:45',
-    estimatedTime: '40 min',
-    location: 'Zona A',
-    status: 'overdue'
-  },
-  {
-    id: '6',
-    type: 'maintenance',
-    title: 'Mantenimiento Preventivo',
-    description: 'Revisión montacargas MC-003',
-    priority: 'low',
-    dueDate: '18:00',
-    estimatedTime: '20 min',
-    location: 'Taller',
-    status: 'pending'
-  }
-];
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL;
+
+export function PendingTasks() {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchTasks = async () => {
+      if (!AUTH_BACKEND_URL) return;
+      setLoading(true);
+      setError(null);
+      try {
+        const resp = await fetch(`${AUTH_BACKEND_URL}/tasks/pending`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        setTasks(data.tasks || []);
+      } catch (e: any) {
+        console.error('Error cargando tareas pendientes:', e);
+        setError(e?.message || 'No se pudo cargar las tareas');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchTasks();
+  }, []);
 
 function getTaskIcon(type: Task['type']) {
   switch (type) {
@@ -134,14 +89,26 @@ function getStatusText(status: Task['status']) {
   }
 }
 
-export function PendingTasks() {
-  const sortedTasks = [...pendingTasks].sort((a, b) => {
+  const sortedTasks = [...tasks].sort((a, b) => {
     // Prioridad: overdue > urgent > high > medium > low
     const priorityOrder = { overdue: 0, urgent: 1, high: 2, medium: 3, low: 4 };
     const aPriority = a.status === 'overdue' ? 0 : priorityOrder[a.priority] + 1;
     const bPriority = b.status === 'overdue' ? 0 : priorityOrder[b.priority] + 1;
     return aPriority - bPriority;
   });
+
+  const uniqueSortedTasks = useMemo(() => {
+    const seen = new Set<string>();
+    const out: Task[] = [];
+    for (const t of sortedTasks) {
+      const key = String(t.id || '');
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push(t);
+      }
+    }
+    return out;
+  }, [sortedTasks]);
 
   return (
     <div className="bg-white rounded-lg shadow-sm border border-gray-200">
@@ -150,8 +117,8 @@ export function PendingTasks() {
           <div>
             <h3 className="text-lg font-semibold text-gray-900">Tareas Pendientes</h3>
             <p className="text-sm text-gray-500">
-              {pendingTasks.filter(t => t.status === 'overdue').length} vencidas, {' '}
-              {pendingTasks.filter(t => t.status === 'pending').length} pendientes
+              {tasks.filter(t => t.status === 'overdue').length} vencidas, {' '}
+              {tasks.filter(t => t.status === 'pending').length} pendientes
             </p>
           </div>
           <button className="text-sm text-blue-600 hover:text-blue-800 font-medium">
@@ -161,7 +128,19 @@ export function PendingTasks() {
       </div>
       
       <div className="divide-y divide-gray-200 max-h-96 overflow-y-auto">
-        {sortedTasks.map((task) => {
+        {!AUTH_BACKEND_URL && (
+          <div className="px-6 py-4 text-sm text-gray-600">Configura `VITE_AUTH_BACKEND_URL` en .env</div>
+        )}
+        {loading && (
+          <div className="px-6 py-4 text-sm text-gray-600">Cargando tareas…</div>
+        )}
+        {error && (
+          <div className="px-6 py-4 text-sm text-red-600">{error}</div>
+        )}
+        {!loading && !error && uniqueSortedTasks.length === 0 && (
+          <div className="px-6 py-4 text-sm text-gray-600">Sin tareas pendientes</div>
+        )}
+        {uniqueSortedTasks.map((task) => {
           const Icon = getTaskIcon(task.type);
           const priorityColor = getPriorityColor(task.priority);
           const statusColor = getStatusColor(task.status);
@@ -225,7 +204,7 @@ export function PendingTasks() {
       <div className="px-6 py-3 bg-gray-50 border-t border-gray-200">
         <div className="flex items-center justify-between">
           <span className="text-sm text-gray-600">
-            Total: {pendingTasks.length} tareas
+            Total: {tasks.length} tareas
           </span>
           <button className="text-sm text-blue-600 hover:text-blue-800 font-medium">
             Crear nueva tarea →

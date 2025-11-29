@@ -1,46 +1,54 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { 
   Plus, 
   Save, 
   Play, 
-  Download, 
   Edit3, 
   Trash2, 
   Copy, 
-  Share2,
-  Settings,
-  Filter,
   BarChart3,
   PieChart,
   LineChart,
   Table,
-  Calendar,
-  Database,
   Eye,
   EyeOff,
-  ChevronDown,
-  ChevronRight,
-  X,
-  Check,
-  AlertCircle,
-  Info
+  X
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+
+type FieldOption = { id: string; name: string; type: 'text' | 'number' | 'currency' | 'date' };
+type FilterOperator = 'equals' | 'not_equals' | 'contains' | 'greater_than' | 'less_than';
+type SelectedFilter = { id: number; field: string; operator: FilterOperator; value: string };
+type ChartType = 'table' | 'bar' | 'pie' | 'line';
+type DataSourceId = 'inventory' | 'orders' | 'shipments' | 'operations' | 'financial' | 'customers';
+type DataSource = { id: DataSourceId; name: string; description: string };
+type ChartTypeOption = { id: ChartType; name: string; icon: LucideIcon };
+type SavedReport = {
+  id: number;
+  name: string;
+  description: string;
+  dataSource: string;
+  chartType: ChartType;
+  createdAt: string;
+  lastRun: string;
+  isPublic: boolean;
+  createdBy: string;
+};
 
 export function CustomReports() {
-  const [selectedReport, setSelectedReport] = useState(null);
   const [isBuilderOpen, setIsBuilderOpen] = useState(false);
   const [reportName, setReportName] = useState('');
   const [reportDescription, setReportDescription] = useState('');
-  const [selectedDataSource, setSelectedDataSource] = useState('');
-  const [selectedFields, setSelectedFields] = useState([]);
-  const [selectedFilters, setSelectedFilters] = useState([]);
-  const [selectedChartType, setSelectedChartType] = useState('table');
-  const [groupBy, setGroupBy] = useState('');
-  const [sortBy, setSortBy] = useState('');
-  const [sortOrder, setSortOrder] = useState('asc');
+  const [selectedDataSource, setSelectedDataSource] = useState<DataSourceId | ''>('');
+  const [selectedFields, setSelectedFields] = useState<FieldOption[]>([]);
+  const [selectedFilters, setSelectedFilters] = useState<SelectedFilter[]>([]);
+  const [selectedChartType, setSelectedChartType] = useState<ChartType>('table');
+  const [groupBy, setGroupBy] = useState<FieldOption['id'] | ''>('');
+  const [sortBy, setSortBy] = useState<FieldOption['id'] | ''>('');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
 
   // Mock data sources
-  const dataSources = [
+  const dataSources: DataSource[] = [
     { id: 'inventory', name: 'Inventario', description: 'Datos de stock y productos' },
     { id: 'orders', name: 'Órdenes', description: 'Órdenes de venta y compra' },
     { id: 'shipments', name: 'Envíos', description: 'Datos de envíos y entregas' },
@@ -50,7 +58,7 @@ export function CustomReports() {
   ];
 
   // Mock available fields based on data source
-  const availableFields = {
+  const availableFields: Record<DataSourceId, FieldOption[]> = {
     inventory: [
       { id: 'product_name', name: 'Nombre del Producto', type: 'text' },
       { id: 'sku', name: 'SKU', type: 'text' },
@@ -73,7 +81,7 @@ export function CustomReports() {
   };
 
   // Mock chart types
-  const chartTypes = [
+  const chartTypes: ChartTypeOption[] = [
     { id: 'table', name: 'Tabla', icon: Table },
     { id: 'bar', name: 'Gráfico de Barras', icon: BarChart3 },
     { id: 'pie', name: 'Gráfico Circular', icon: PieChart },
@@ -81,7 +89,7 @@ export function CustomReports() {
   ];
 
   // Mock saved reports
-  const savedReports = [
+  const savedReports: SavedReport[] = [
     {
       id: 1,
       name: 'Inventario por Categoría',
@@ -117,8 +125,8 @@ export function CustomReports() {
     }
   ];
 
-  const handleFieldToggle = (field) => {
-    setSelectedFields(prev => 
+  const handleFieldToggle = (field: FieldOption) => {
+    setSelectedFields((prev) => 
       prev.find(f => f.id === field.id)
         ? prev.filter(f => f.id !== field.id)
         : [...prev, field]
@@ -126,7 +134,7 @@ export function CustomReports() {
   };
 
   const handleAddFilter = () => {
-    setSelectedFilters(prev => [...prev, {
+    setSelectedFilters((prev) => [...prev, {
       id: Date.now(),
       field: '',
       operator: 'equals',
@@ -134,14 +142,25 @@ export function CustomReports() {
     }]);
   };
 
-  const handleRemoveFilter = (filterId) => {
-    setSelectedFilters(prev => prev.filter(f => f.id !== filterId));
+  const handleRemoveFilter = (filterId: number) => {
+    setSelectedFilters((prev) => prev.filter((f) => f.id !== filterId));
   };
 
-  const handleFilterChange = (filterId, property, value) => {
-    setSelectedFilters(prev => prev.map(f => 
-      f.id === filterId ? { ...f, [property]: value } : f
-    ));
+  type FilterProp = 'field' | 'operator' | 'value';
+  type FilterPropValue<P extends FilterProp> = P extends 'operator' ? FilterOperator : string;
+
+  const handleFilterChange = <P extends FilterProp>(
+    filterId: number,
+    property: P,
+    value: FilterPropValue<P>
+  ) => {
+    setSelectedFilters((prev) => prev.map((f) => {
+      if (f.id !== filterId) return f;
+      if (property === 'operator') {
+        return { ...f, operator: value as FilterOperator };
+      }
+      return { ...f, [property]: value as string };
+    }));
   };
 
   const handleSaveReport = () => {
@@ -170,17 +189,17 @@ export function CustomReports() {
     setSortOrder('asc');
   };
 
-  const handleRunReport = (report) => {
+  const handleRunReport = (report: SavedReport) => {
     console.log('Running report:', report);
     // Mock report execution
   };
 
-  const handleDeleteReport = (reportId) => {
+  const handleDeleteReport = (reportId: number) => {
     console.log('Deleting report:', reportId);
     // Mock delete functionality
   };
 
-  const handleDuplicateReport = (report) => {
+  const handleDuplicateReport = (report: SavedReport) => {
     console.log('Duplicating report:', report);
     // Mock duplicate functionality
   };
@@ -318,7 +337,7 @@ export function CustomReports() {
                     </label>
                     <select
                       value={selectedDataSource}
-                      onChange={(e) => setSelectedDataSource(e.target.value)}
+                      onChange={(e) => setSelectedDataSource(e.target.value as DataSourceId)}
                       className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     >
                       <option value="">Seleccionar fuente...</option>
@@ -347,7 +366,7 @@ export function CustomReports() {
                 <div className="space-y-4">
                   <h4 className="font-medium text-gray-900">Campos a Mostrar</h4>
                   <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                    {availableFields[selectedDataSource]?.map(field => (
+                    {availableFields[(selectedDataSource || undefined) as DataSourceId]?.map(field => (
                       <label key={field.id} className="flex items-center space-x-2 p-2 border border-gray-200 rounded hover:bg-gray-50">
                         <input
                           type="checkbox"
@@ -382,7 +401,7 @@ export function CustomReports() {
                       className="px-2 py-1 border border-gray-300 rounded text-sm"
                     >
                       <option value="">Campo...</option>
-                      {availableFields[selectedDataSource]?.map(field => (
+                      {availableFields[(selectedDataSource || undefined) as DataSourceId]?.map(field => (
                         <option key={field.id} value={field.id}>{field.name}</option>
                       ))}
                     </select>
@@ -450,7 +469,7 @@ export function CustomReports() {
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   >
                     <option value="">Sin agrupar</option>
-                    {availableFields[selectedDataSource]?.map(field => (
+                    {availableFields[(selectedDataSource || undefined) as DataSourceId]?.map(field => (
                       <option key={field.id} value={field.id}>{field.name}</option>
                     ))}
                   </select>
@@ -465,7 +484,7 @@ export function CustomReports() {
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   >
                     <option value="">Sin ordenar</option>
-                    {availableFields[selectedDataSource]?.map(field => (
+                    {availableFields[(selectedDataSource || undefined) as DataSourceId]?.map(field => (
                       <option key={field.id} value={field.id}>{field.name}</option>
                     ))}
                   </select>

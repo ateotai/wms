@@ -151,8 +151,18 @@ export function authenticateUser(credentials: LoginCredentials): AuthResult {
       saveLocalUsers(users);
     }
 
-    // Remover password del resultado
-    const { password, ...userWithoutPassword } = user;
+    // Remover password del resultado sin variables no usadas
+    const userWithoutPassword: Omit<LocalUser, 'password'> = {
+      id: user.id,
+      email: user.email,
+      full_name: user.full_name,
+      role: user.role,
+      permissions: user.permissions,
+      is_active: user.is_active,
+      last_login: user.last_login,
+      created_at: user.created_at,
+      updated_at: user.updated_at
+    };
     
     return {
       success: true,
@@ -195,7 +205,17 @@ export function createLocalUser(userData: Omit<LocalUser, 'id' | 'created_at' | 
     users.push(newUser);
     saveLocalUsers(users);
 
-    const { password, ...userWithoutPassword } = newUser;
+    const userWithoutPassword: Omit<LocalUser, 'password'> = {
+      id: newUser.id,
+      email: newUser.email,
+      full_name: newUser.full_name,
+      role: newUser.role,
+      permissions: newUser.permissions,
+      is_active: newUser.is_active,
+      last_login: newUser.last_login,
+      created_at: newUser.created_at,
+      updated_at: newUser.updated_at
+    };
     
     return {
       success: true,

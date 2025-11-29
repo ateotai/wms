@@ -1,17 +1,12 @@
 import React, { useState } from 'react';
+import { formatCurrency } from '../../utils/currency';
 import { 
   DollarSign, 
-  TrendingUp, 
-  TrendingDown,
-  PieChart,
-  BarChart3,
   Calculator,
   Target,
-  AlertTriangle,
   Download,
   RefreshCw,
   Filter,
-  Calendar,
   ArrowUp,
   ArrowDown,
   Minus,
@@ -48,7 +43,7 @@ export function FinancialReports() {
   const financialMetrics = [
     {
       title: 'Ingresos Totales',
-      value: '€245,680',
+      value: formatCurrency(245680),
       change: 12.5,
       trend: 'up',
       icon: DollarSign,
@@ -57,7 +52,7 @@ export function FinancialReports() {
     },
     {
       title: 'Costos Operacionales',
-      value: '€89,420',
+      value: formatCurrency(89420),
       change: -5.2,
       trend: 'down',
       icon: Calculator,
@@ -226,12 +221,7 @@ export function FinancialReports() {
     return 'text-gray-600';
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('es-ES', {
-      style: 'currency',
-      currency: 'EUR'
-    }).format(amount);
-  };
+  // Usar utilidad global para formateo de moneda
 
   const formatPercentage = (value: number) => {
     return `${value.toFixed(1)}%`;

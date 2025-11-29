@@ -1,9 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { 
   FileText, 
-  Calendar, 
-  User, 
-  Package, 
   Eye, 
   Edit, 
   CheckCircle, 
@@ -12,11 +9,19 @@ import {
   X,
   Plus,
   Search,
-  Filter
+  Filter,
+  Bell
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { useAuth } from '../../contexts/AuthContext';
 
 const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
+
+// Moneda desde configuración
+type Currency = 'MXN' | 'USD' | 'EUR';
+const getCurrencySymbol = (c: Currency) => ({ MXN: '$', USD: '$', EUR: '€' }[c]);
+const getCurrencyLocale = (c: Currency) => ({ MXN: 'es-MX', USD: 'en-US', EUR: 'es-ES' }[c]);
+const getCurrencyCode = (c: Currency) => ({ MXN: 'MXN', USD: 'USD', EUR: 'EUR' }[c]);
 
 interface PurchaseOrderItem {
   id: string;
@@ -32,7 +37,7 @@ interface PurchaseOrder {
   id: string;
   orderNumber: string;
   supplier: string;
-  status: 'pending' | 'partial' | 'received' | 'cancelled';
+  status: string;
   orderDate: string;
   expectedDate: string;
   totalAmount: number;
@@ -47,7 +52,31 @@ type WarehouseOption = {
   is_active: boolean;
 };
 
+// Tipos de backend mínimos usados para mapear respuestas
+type BackendPurchaseOrder = {
+  id: string | number;
+  po_number: string;
+  supplier_id?: string | number | null;
+  status?: string;
+  order_date: string;
+  expected_date: string;
+  total_amount?: number;
+  items?: BackendPurchaseOrderItem[];
+  notes?: string | null;
+};
+
+type BackendPurchaseOrderItem = {
+  id: string | number;
+  products?: { sku?: string; description?: string; name?: string };
+  quantity?: number;
+  received_quantity?: number;
+  unit_price?: number;
+  total_price?: number;
+};
+
 export const PurchaseOrders: React.FC = () => {
+  const { signOut } = useAuth();
+  const [currency, setCurrency] = useState<Currency>('MXN');
   const [selectedOrder, setSelectedOrder] = useState<PurchaseOrder | null>(null);
   const [showOrderModal, setShowOrderModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -62,11 +91,157 @@ export const PurchaseOrders: React.FC = () => {
   });
   const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
 
+  // Notificaciones Push
+  const [notificationsSupported, setNotificationsSupported] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [notificationError, setNotificationError] = useState<string | null>(null);
+  // Resaltado temporal tras sincronización
+  const [highlightCount, setHighlightCount] = useState<number>(0);
+  const [showHighlightBanner, setShowHighlightBanner] = useState<boolean>(false);
+  const [appointmentOrderIds, setAppointmentOrderIds] = useState<Set<string>>(new Set());
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [editingStatusId, setEditingStatusId] = useState<string | null>(null);
+  const [editingStatusValue, setEditingStatusValue] = useState<string>('pending');
+  const ORDER_STATUS_OPTIONS = ['pending','partial','received','cancelled','draft','sent','confirmed'];
+  const filteredOrders = React.useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    return orders.filter((o) =>
+      (statusFilter === 'all' || String(o.status || '').toLowerCase() === statusFilter) &&
+      (term === '' ||
+        o.orderNumber.toLowerCase().includes(term) ||
+        o.supplier.toLowerCase().includes(term))
+    );
+  }, [orders, statusFilter, searchTerm]);
+
+  useEffect(() => {
+    const supported = 'Notification' in window;
+    setNotificationsSupported(supported);
+    if (!supported) return;
+    if (Notification.permission === 'granted') {
+      setNotificationsEnabled(true);
+      // Si ya hay permiso, asegurar suscripción registrada en backend
+      subscribePush();
+    } else if (Notification.permission === 'default') {
+      // Solicitar permiso automáticamente para activar notificaciones por defecto
+      Notification.requestPermission()
+        .then((permission) => {
+          const granted = permission === 'granted';
+          setNotificationsEnabled(granted);
+          if (granted) {
+            subscribePush();
+          } else {
+            setNotificationError('Permiso de notificaciones denegado.');
+          }
+        })
+        .catch(() => {
+          setNotificationError('No se pudo solicitar permiso de notificaciones.');
+        });
+    }
+  }, []);
+
+  function urlBase64ToUint8Array(base64String: string) {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const rawData = window.atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; ++i) {
+      outputArray[i] = rawData.charCodeAt(i);
+    }
+    return outputArray;
+  }
+
+  const ensureServiceWorker = async (): Promise<ServiceWorkerRegistration | null> => {
+    try {
+      if (!('serviceWorker' in navigator)) return null;
+      const existing = await navigator.serviceWorker.getRegistration();
+      if (existing) return existing;
+      return await navigator.serviceWorker.register('/sw.js');
+    } catch {
+      return null;
+    }
+  };
+
+  const subscribePush = async () => {
+    try {
+      setNotificationError(null);
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+        setNotificationError('El navegador no soporta Push API.');
+        return;
+      }
+      const reg = await ensureServiceWorker();
+      if (!reg) {
+        setNotificationError('No se pudo registrar el Service Worker.');
+        return;
+      }
+
+      // Obtener clave pública VAPID desde backend o env
+      let publicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY || '';
+      if (!publicKey && AUTH_BACKEND_URL) {
+        try {
+          const resp = await fetch(`${AUTH_BACKEND_URL}/push/vapidPublicKey`);
+          if (resp.ok) {
+            const json = await resp.json();
+            publicKey = json?.publicKey || '';
+          }
+        } catch {
+          // noop
+        }
+      }
+      if (!publicKey) {
+        setNotificationError('No hay clave pública VAPID configurada.');
+        return;
+      }
+
+      // Reusar suscripción existente si la hay
+      let subscription = await reg.pushManager.getSubscription();
+      if (!subscription) {
+        subscription = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(publicKey),
+        });
+      }
+
+      // Enviar suscripción al backend
+      if (AUTH_BACKEND_URL && subscription) {
+        await fetch(`${AUTH_BACKEND_URL}/push/subscribe`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subscription }),
+        });
+      }
+      setNotificationsEnabled(true);
+    } catch (e) {
+      console.warn('Error suscribiendo a Push:', e);
+      setNotificationError('No se pudo registrar la suscripción Push.');
+    }
+  };
+
+  const requestNotificationPermission = async () => {
+    try {
+      setNotificationError(null);
+      if (!notificationsSupported) {
+        setNotificationError('Las notificaciones no son soportadas por este navegador.');
+        return;
+      }
+      const permission = await Notification.requestPermission();
+      const granted = permission === 'granted';
+      setNotificationsEnabled(granted);
+      if (granted) {
+        subscribePush();
+      } else {
+        setNotificationError('Permiso de notificaciones denegado.');
+      }
+    } catch {
+      setNotificationError('No se pudo solicitar permiso de notificaciones.');
+    }
+  };
+
   const isValidUUID = (v: string): boolean => {
     return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/.test(v.trim());
   };
 
-  const loadWarehouses = async () => {
+  const loadWarehouses = useCallback(async () => {
     try {
       const { data, error } = await supabase
         .from('warehouses')
@@ -82,11 +257,34 @@ export const PurchaseOrders: React.FC = () => {
     } catch (e) {
       console.error('Error cargando almacenes:', e);
     }
-  };
+  }, [createForm.warehouseId]);
+
+  const loadActiveAppointments = useCallback(async () => {
+    try {
+      if (!AUTH_BACKEND_URL) return;
+      const token = localStorage.getItem('app_token');
+      const resp = await fetch(`${AUTH_BACKEND_URL}/reception/appointments`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!resp.ok) return;
+      const json = await resp.json();
+      const active = new Set(['scheduled', 'arrived', 'receiving', 'validated']);
+      const ids = new Set<string>();
+      for (const a of (json.appointments || [])) {
+        const st = String(a?.status || '').toLowerCase();
+        if (!active.has(st)) continue;
+        for (const o of (a.orders || [])) ids.add(String(o.id));
+        for (const id of (a.order_ids || [])) ids.add(String(id));
+      }
+      setAppointmentOrderIds(ids);
+    } catch {
+      // noop
+    }
+  }, []);
 
   useEffect(() => {
     loadWarehouses();
-  }, []);
+  }, [loadWarehouses]);
 
   const fetchOrders = async () => {
     try {
@@ -98,11 +296,19 @@ export const PurchaseOrders: React.FC = () => {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!resp.ok) {
+        if (resp.status === 401) {
+          try { localStorage.removeItem('app_token'); } catch {}
+          await signOut();
+          setError('Sesión expirada. Vuelve a iniciar sesión.');
+          setLoading(false);
+          return;
+        }
         const text = await resp.text().catch(() => '');
         throw new Error(text || 'Error al cargar órdenes de compra');
       }
       const json = await resp.json();
-      const list = (json.purchase_orders || []).map((po: any) => ({
+      const rawList: BackendPurchaseOrder[] = (json.purchase_orders || []) as BackendPurchaseOrder[];
+      const list = rawList.map((po: BackendPurchaseOrder) => ({
         id: String(po.id),
         orderNumber: po.po_number,
         supplier: po.supplier_id ? `Proveedor #${po.supplier_id}` : 'Proveedor',
@@ -114,9 +320,10 @@ export const PurchaseOrders: React.FC = () => {
         notes: po.notes || undefined,
       })) as PurchaseOrder[];
       setOrders(list);
-    } catch (err: any) {
+    } catch (err) {
       console.error('Error fetching purchase orders:', err);
-      setError('Error al cargar órdenes de compra');
+      const message = err instanceof Error ? err.message : 'Error al cargar órdenes de compra';
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -130,6 +337,11 @@ export const PurchaseOrders: React.FC = () => {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!resp.ok) {
+        if (resp.status === 401) {
+          try { localStorage.removeItem('app_token'); } catch {}
+          await signOut();
+          throw new Error('Sesión expirada. Vuelve a iniciar sesión.');
+        }
         const text = await resp.text().catch(() => '');
         throw new Error(text || 'Error al cargar detalles de la orden');
       }
@@ -142,7 +354,7 @@ export const PurchaseOrders: React.FC = () => {
         orderDate: purchase_order.order_date,
         expectedDate: purchase_order.expected_date,
         totalAmount: Number(purchase_order.total_amount || 0),
-        items: (purchase_order.items || []).map((it: any) => ({
+        items: (purchase_order.items || []).map((it: BackendPurchaseOrderItem) => ({
           id: String(it.id),
           sku: it.products?.sku || '',
           description: it.products?.description || it.products?.name || '',
@@ -160,9 +372,174 @@ export const PurchaseOrders: React.FC = () => {
     }
   };
 
+  const handleReceiveOrder = async (orderId: string) => {
+    try {
+      const detail = await fetchOrderDetail(orderId);
+      if (!detail) throw new Error('No se pudo cargar la orden');
+      const itemsPayload = detail.items
+        .map((it) => ({
+          item_id: it.id,
+          quantity: Math.max(0, it.quantityOrdered - it.quantityReceived),
+        }))
+        .filter((it) => it.quantity > 0);
+      if (itemsPayload.length === 0) {
+        alert('No hay cantidades pendientes por recibir.');
+        return;
+      }
+      const token = localStorage.getItem('app_token');
+      if (!AUTH_BACKEND_URL) throw new Error('Backend no configurado');
+      const resp = await fetch(`${AUTH_BACKEND_URL}/purchase_orders/${orderId}/receive`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ items: itemsPayload }),
+      });
+      if (!resp.ok) {
+        if (resp.status === 401) {
+          try { localStorage.removeItem('app_token'); } catch {}
+          await signOut();
+          alert('Sesión expirada. Vuelve a iniciar sesión.');
+          return;
+        }
+        const text = await resp.text().catch(() => '');
+        throw new Error(text || 'Error al recepcionar la orden');
+      }
+      const json = await resp.json();
+      alert(`Recepción exitosa: ${json.receivedQty} unidades. Estado: ${json.status}`);
+      await fetchOrders();
+      if (showOrderModal) {
+        const updated = await fetchOrderDetail(orderId);
+        if (updated) setSelectedOrder(updated);
+      }
+    } catch (err) {
+      console.error('Error receiving order:', err);
+      const message = err instanceof Error ? err.message : 'Error al recepcionar la orden';
+      alert(message);
+    }
+  };
+
+  const handleCreateOrder = async () => {
+    try {
+      const token = localStorage.getItem('app_token');
+      if (!AUTH_BACKEND_URL) throw new Error('Backend no configurado');
+      type CreatePurchaseOrderPayload = {
+        supplier_id: string | null;
+        warehouse_id: string;
+        expected_date: string | null;
+        notes: string | null;
+      };
+      const payload: CreatePurchaseOrderPayload = {
+        supplier_id: isValidUUID(createForm.supplierId) ? createForm.supplierId.trim() : null,
+        warehouse_id: createForm.warehouseId,
+        expected_date: createForm.expectedDate || null,
+        notes: createForm.notes || null,
+      };
+      if (!payload.warehouse_id) {
+        alert('Selecciona un almacén');
+        return;
+      }
+      const resp = await fetch(`${AUTH_BACKEND_URL}/purchase_orders`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      });
+      if (!resp.ok) {
+        if (resp.status === 401) {
+          try { localStorage.removeItem('app_token'); } catch {}
+          await signOut();
+          alert('Sesión expirada. Vuelve a iniciar sesión.');
+          return;
+        }
+        const text = await resp.text().catch(() => '');
+        throw new Error(text || 'Error al crear la orden');
+      }
+      const { purchase_order } = await resp.json();
+      setShowCreateModal(false);
+      setCreateForm({ supplierId: '', warehouseId: '', expectedDate: '', notes: '' });
+      await fetchOrders();
+      alert(`Orden creada: ${purchase_order.po_number}`);
+    } catch (err) {
+      console.error('Error creating order:', err);
+      const message = err instanceof Error ? err.message : 'Error al crear la orden';
+      alert(message);
+    }
+  };
+
+  const updateOrderStatus = async (orderId: string, newStatus: string) => {
+    try {
+      const token = localStorage.getItem('app_token');
+      if (!AUTH_BACKEND_URL) throw new Error('Backend no configurado');
+      setLoading(true);
+      setError(null);
+      const resp = await fetch(`${AUTH_BACKEND_URL}/purchase_orders/${orderId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ status: newStatus }),
+      });
+      if (!resp.ok) {
+        if (resp.status === 401) {
+          try { localStorage.removeItem('app_token'); } catch {}
+          await signOut();
+          setError('Sesión expirada. Vuelve a iniciar sesión.');
+          setLoading(false);
+          return;
+        }
+        const text = await resp.text().catch(() => '');
+        throw new Error(text || 'Error al actualizar estado de la orden');
+      }
+      setEditingStatusId(null);
+      await fetchOrders();
+      if (showOrderModal && selectedOrder && selectedOrder.id === orderId) {
+        const updated = await fetchOrderDetail(orderId);
+        if (updated) setSelectedOrder(updated);
+      }
+    } catch (err) {
+      console.error('Error updateOrderStatus:', err);
+      const message = err instanceof Error ? err.message : 'Error al actualizar estado';
+      alert(message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
     fetchOrders();
+    try {
+      const c = (localStorage.getItem('system_currency') as Currency) || 'MXN';
+      setCurrency(c);
+    } catch (e) {
+      // ignore
+    }
+    loadActiveAppointments();
   }, []);
+
+  // Resaltado temporal al detectar nuevas órdenes tras sincronización
+  useEffect(() => {
+    try {
+      const raw = sessionStorage.getItem('notify_po_last');
+      if (!raw) return;
+      const payload = JSON.parse(raw);
+      const count = Number(payload?.newCount ?? payload?.count ?? 0);
+      const ts = Number(payload?.ts ?? Date.now());
+      const withinWindow = Date.now() - ts < 5 * 60 * 1000; // 5 minutos
+      if (orders.length > 0 && count > 0 && withinWindow) {
+        setHighlightCount(Math.min(count, orders.length));
+        setShowHighlightBanner(true);
+        window.setTimeout(() => {
+          setHighlightCount(0);
+          setShowHighlightBanner(false);
+          try { sessionStorage.removeItem('notify_po_last'); } catch {}
+        }, 3500);
+      }
+    } catch {
+      // ignore
+    }
+  }, [orders]);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -200,89 +577,16 @@ export const PurchaseOrders: React.FC = () => {
     }
   };
 
+  const isInActiveAppointment = (id: string) => appointmentOrderIds.has(String(id));
+
   const handleViewOrder = async (order: PurchaseOrder) => {
     const detail = await fetchOrderDetail(order.id);
     setSelectedOrder(detail || order);
     setShowOrderModal(true);
   };
 
-  const handleReceiveOrder = async (orderId: string) => {
-    try {
-      const detail = await fetchOrderDetail(orderId);
-      if (!detail) throw new Error('No se pudo cargar la orden');
-      const itemsPayload = detail.items
-        .map((it) => ({
-          item_id: it.id,
-          quantity: Math.max(0, it.quantityOrdered - it.quantityReceived),
-        }))
-        .filter((it) => it.quantity > 0);
-      if (itemsPayload.length === 0) {
-        alert('No hay cantidades pendientes por recibir.');
-        return;
-      }
-      const token = localStorage.getItem('app_token');
-      if (!AUTH_BACKEND_URL) throw new Error('Backend no configurado');
-      const resp = await fetch(`${AUTH_BACKEND_URL}/purchase_orders/${orderId}/receive`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ items: itemsPayload }),
-      });
-      if (!resp.ok) {
-        const text = await resp.text().catch(() => '');
-        throw new Error(text || 'Error al recepcionar la orden');
-      }
-      const json = await resp.json();
-      alert(`Recepción exitosa: ${json.receivedQty} unidades. Estado: ${json.status}`);
-      await fetchOrders();
-      if (showOrderModal) {
-        const updated = await fetchOrderDetail(orderId);
-        if (updated) setSelectedOrder(updated);
-      }
-    } catch (err: any) {
-      console.error('Error receiving order:', err);
-      alert(err?.message || 'Error al recepcionar la orden');
-    }
-  };
 
-  const handleCreateOrder = async () => {
-    try {
-      const token = localStorage.getItem('app_token');
-      if (!AUTH_BACKEND_URL) throw new Error('Backend no configurado');
-      const payload: any = {
-        supplier_id: isValidUUID(createForm.supplierId) ? createForm.supplierId.trim() : null,
-        warehouse_id: createForm.warehouseId,
-        expected_date: createForm.expectedDate || null,
-        notes: createForm.notes || null,
-      };
-      if (!payload.warehouse_id) {
-        alert('Selecciona un almacén');
-        return;
-      }
-      const resp = await fetch(`${AUTH_BACKEND_URL}/purchase_orders`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify(payload),
-      });
-      if (!resp.ok) {
-        const text = await resp.text().catch(() => '');
-        throw new Error(text || 'Error al crear la orden');
-      }
-      const { purchase_order } = await resp.json();
-      setShowCreateModal(false);
-      setCreateForm({ supplierId: '', warehouseId: '', expectedDate: '', notes: '' });
-      await fetchOrders();
-      alert(`Orden creada: ${purchase_order.po_number}`);
-    } catch (err: any) {
-      console.error('Error creating order:', err);
-      alert(err?.message || 'Error al crear la orden');
-    }
-  };
+
 
   return (
     <div className="space-y-6">
@@ -294,6 +598,8 @@ export const PurchaseOrders: React.FC = () => {
             <input
               type="text"
               placeholder="Buscar órdenes..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
           </div>
@@ -301,15 +607,33 @@ export const PurchaseOrders: React.FC = () => {
             <Filter className="w-4 h-4 mr-2" />
             Filtros
           </button>
+          <select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="ml-2 px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            title="Filtrar por estado"
+          >
+            <option value="all">Todos</option>
+            {ORDER_STATUS_OPTIONS.map((s) => (
+              <option key={s} value={s}>{getStatusText(s)}</option>
+            ))}
+          </select>
         </div>
-        <button 
-          onClick={() => setShowCreateModal(true)}
-          className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
-        >
-          <Plus className="w-4 h-4 mr-2" />
-          Nueva Orden
-        </button>
+        <div className="flex items-center space-x-2">
+          {/* Botón de crear nueva orden removido por requerimiento */}
+        </div>
       </div>
+
+      {notificationError && (
+        <div className="text-sm text-red-600">{notificationError}</div>
+      )}
+
+      {showHighlightBanner && highlightCount > 0 && (
+        <div className="flex items-center text-sm bg-yellow-100 border border-yellow-200 text-yellow-800 px-3 py-2 rounded-md">
+          <span className="font-medium mr-2">Nuevas órdenes:</span>
+          <span>{highlightCount}</span>
+        </div>
+      )}
 
       {/* Orders Table */}
       <div className="bg-white rounded-lg shadow overflow-hidden">
@@ -352,10 +676,10 @@ export const PurchaseOrders: React.FC = () => {
                 <td colSpan={6} className="px-6 py-4 text-sm text-gray-500">No hay órdenes de compra</td>
               </tr>
             )}
-            {!loading && !error && orders.map((order) => {
+            {!loading && !error && filteredOrders.map((order, idx) => {
               const StatusIcon = getStatusIcon(order.status);
               return (
-                <tr key={order.id} className="hover:bg-gray-50">
+                <tr key={order.id} className={`hover:bg-gray-50 ${highlightCount > 0 && idx < highlightCount ? 'bg-yellow-50 transition-colors' : ''}`}>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex items-center">
                       <FileText className="w-5 h-5 text-gray-400 mr-3" />
@@ -377,12 +701,17 @@ export const PurchaseOrders: React.FC = () => {
                       <StatusIcon className="w-3 h-3 mr-1" />
                       {getStatusText(order.status)}
                     </span>
+                    {isInActiveAppointment(order.id) && (
+                      <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                        En cita
+                      </span>
+                    )}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                     {new Date(order.expectedDate).toLocaleDateString()}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    ${order.totalAmount.toLocaleString()}
+                    {new Intl.NumberFormat(getCurrencyLocale(currency), { style: 'currency', currency: getCurrencyCode(currency) }).format(order.totalAmount)}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
                     <div className="flex space-x-2">
@@ -392,13 +721,46 @@ export const PurchaseOrders: React.FC = () => {
                       >
                         <Eye className="w-4 h-4" />
                       </button>
-                      <button className="text-gray-600 hover:text-gray-900">
-                        <Edit className="w-4 h-4" />
-                      </button>
-                      {order.status === 'pending' && (
+                      {editingStatusId === order.id ? (
+                        <div className="flex items-center space-x-2">
+                          <select
+                            value={editingStatusValue}
+                            onChange={(e) => setEditingStatusValue(e.target.value)}
+                            className="text-xs border border-gray-300 rounded px-2 py-1"
+                          >
+                            {ORDER_STATUS_OPTIONS.map((s) => (
+                              <option key={s} value={s}>{getStatusText(s)}</option>
+                            ))}
+                          </select>
+                          <button
+                            onClick={() => updateOrderStatus(order.id, editingStatusValue)}
+                            className="text-blue-600 hover:text-blue-900 text-xs"
+                            title="Guardar estado"
+                          >
+                            Guardar
+                          </button>
+                          <button
+                            onClick={() => setEditingStatusId(null)}
+                            className="text-gray-600 hover:text-gray-900 text-xs"
+                            title="Cancelar"
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          className="text-gray-600 hover:text-gray-900"
+                          onClick={() => { setEditingStatusId(order.id); setEditingStatusValue(order.status); }}
+                          title="Cambiar estado"
+                        >
+                          <Edit className="w-4 h-4" />
+                        </button>
+                      )}
+                      {order.status === 'pending' && !isInActiveAppointment(order.id) && (
                         <button
                           onClick={() => handleReceiveOrder(order.id)}
                           className="text-green-600 hover:text-green-900"
+                          title="Iniciar recepción"
                         >
                           <CheckCircle className="w-4 h-4" />
                         </button>
@@ -500,7 +862,7 @@ export const PurchaseOrders: React.FC = () => {
                   <div><span className="font-medium">Proveedor:</span> {selectedOrder.supplier}</div>
                   <div><span className="font-medium">Fecha de Orden:</span> {new Date(selectedOrder.orderDate).toLocaleDateString()}</div>
                   <div><span className="font-medium">Fecha Esperada:</span> {new Date(selectedOrder.expectedDate).toLocaleDateString()}</div>
-                  <div><span className="font-medium">Total:</span> ${selectedOrder.totalAmount.toLocaleString()}</div>
+                  <div><span className="font-medium">Total:</span> {new Intl.NumberFormat(getCurrencyLocale(currency), { style: 'currency', currency: getCurrencyCode(currency) }).format(selectedOrder.totalAmount)}</div>
                 </div>
               </div>
               <div>
@@ -539,8 +901,12 @@ export const PurchaseOrders: React.FC = () => {
                         <td className="px-4 py-2 text-sm text-gray-900">{item.description}</td>
                         <td className="px-4 py-2 text-sm text-gray-900">{item.quantityOrdered}</td>
                         <td className="px-4 py-2 text-sm text-gray-900">{item.quantityReceived}</td>
-                        <td className="px-4 py-2 text-sm text-gray-900">${item.unitPrice}</td>
-                        <td className="px-4 py-2 text-sm text-gray-900">${item.totalPrice.toLocaleString()}</td>
+                        <td className="px-4 py-2 text-sm text-gray-900">
+                          {new Intl.NumberFormat(getCurrencyLocale(currency), { style: 'currency', currency: getCurrencyCode(currency) }).format(item.unitPrice)}
+                        </td>
+                        <td className="px-4 py-2 text-sm text-gray-900">
+                          {new Intl.NumberFormat(getCurrencyLocale(currency), { style: 'currency', currency: getCurrencyCode(currency) }).format(item.totalPrice)}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -555,7 +921,7 @@ export const PurchaseOrders: React.FC = () => {
               >
                 Cerrar
               </button>
-              {selectedOrder.status === 'pending' && (
+              {selectedOrder.status === 'pending' && !isInActiveAppointment(selectedOrder.id) && (
                 <button
                   onClick={() => handleReceiveOrder(selectedOrder.id)}
                   className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"

@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import { 
-  BarChart3, 
   TrendingUp, 
   PieChart, 
   FileText, 

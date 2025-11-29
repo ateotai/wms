@@ -9,24 +9,36 @@ import {
   Package,
   TrendingUp,
   AlertTriangle,
-  Upload
+  Upload,
+  BarChart3
 } from 'lucide-react';
 import { InventoryStats } from './InventoryStats';
 import { InventoryList } from './InventoryList';
 import { StockMovements } from './StockMovements';
 import { LowStockAlerts } from './LowStockAlerts';
+import { Traceability } from './Traceability';
 import { ProductImport } from './ProductImport';
+import { Outbound } from './Outbound';
+import { Inbound } from './Inbound';
+import CycleCounts from './CycleCounts';
+import { supabase } from '../../lib/supabase';
+import { ProductsTable } from './ProductsTable';
 
 export function InventoryDashboard() {
   const [searchTerm, setSearchTerm] = useState('');
   const [showFilters, setShowFilters] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [filterCategory, setFilterCategory] = useState('all');
   const location = useLocation();
+  const [cyclePendingCount, setCyclePendingCount] = useState<number>(0);
 
   const tabs = [
     { name: 'Resumen', href: '/inventory', icon: Package },
+    { name: 'Productos', href: '/inventory/products', icon: Package },
     { name: 'Movimientos', href: '/inventory/movements', icon: TrendingUp },
-    { name: 'Alertas', href: '/inventory/alerts', icon: AlertTriangle }
+    { name: 'Alertas', href: '/inventory/alerts', icon: AlertTriangle },
+    { name: 'Trazabilidad', href: '/inventory/traceability', icon: TrendingUp },
+    { name: 'Recuentos', href: '/inventory/cycle-counts', icon: BarChart3 }
   ];
 
   const isActiveTab = (href: string) => {
@@ -36,7 +48,76 @@ export function InventoryDashboard() {
     return location.pathname.startsWith(href);
   };
 
-  const handleImportProducts = async (products: any[]) => {
+  // Badge: recuentos pendientes/planificados
+  const fetchCyclePendingCount = async () => {
+    try {
+      const { count, error } = await supabase
+        .from('cycle_counts')
+        .select('id', { count: 'exact', head: true })
+        .in('status', ['planned', 'in_progress']);
+      if (error) throw error;
+      setCyclePendingCount(count || 0);
+    } catch (e) {
+      console.error('Error obteniendo conteo de recuentos pendientes:', e);
+    }
+  };
+
+  React.useEffect(() => {
+    if (!location.pathname.startsWith('/inventory')) return;
+    // Primera carga inmediata
+    fetchCyclePendingCount();
+    // Refresco automático cada 60 segundos
+    const intervalId = window.setInterval(() => {
+      fetchCyclePendingCount();
+    }, 60000);
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [location.pathname]);
+
+  // Suscripción en tiempo real a cambios en cycle_counts
+  React.useEffect(() => {
+    if (!location.pathname.startsWith('/inventory')) return;
+    const channel = supabase
+      .channel('realtime:cycle_counts')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cycle_counts' }, (payload) => {
+        type StatusRow = { status?: string };
+        type CycleCountChange = { new?: StatusRow; old?: StatusRow };
+        const p = payload as CycleCountChange;
+        const nextStatus = p?.new?.status as string | undefined;
+        const prevStatus = p?.old?.status as string | undefined;
+        const relevant = (s?: string) => s === 'planned' || s === 'in_progress' || s === 'completed' || s === 'cancelled';
+        // Actualiza cuando un recuento entra/sale de estados relevantes
+        if (relevant(nextStatus) || relevant(prevStatus)) {
+          fetchCyclePendingCount();
+        }
+      });
+    channel.subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        // Sincroniza al suscribirse
+        fetchCyclePendingCount();
+      }
+    });
+    return () => {
+      try { channel.unsubscribe(); } catch (e) { console.debug('Error al desuscribir canal', e); }
+    };
+  }, [location.pathname]);
+
+  interface ProductImportRow {
+    sku: string;
+    name: string;
+    description?: string;
+    unit_of_measure?: string;
+    cost_price?: number;
+    selling_price?: number;
+    min_stock_level?: number;
+    max_stock_level?: number;
+    reorder_point?: number;
+    barcode?: string | null;
+    weight?: number | null;
+  }
+
+  const handleImportProducts = async (products: ProductImportRow[]) => {
     try {
       // Preparar los productos para inserción
       const productsToInsert = products.map(product => ({
@@ -144,6 +225,11 @@ export function InventoryDashboard() {
               >
                 <Icon className="w-4 h-4 mr-2" />
                 {tab.name}
+                {tab.href === '/inventory/cycle-counts' && cyclePendingCount > 0 && (
+                  <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
+                    {cyclePendingCount}
+                  </span>
+                )}
               </Link>
             );
           })}
@@ -189,8 +275,12 @@ export function InventoryDashboard() {
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Categoría
               </label>
-              <select className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm">
-                <option value="">Todas las categorías</option>
+              <select
+                value={filterCategory}
+                onChange={(e) => setFilterCategory(e.target.value)}
+                className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm"
+              >
+                <option value="all">Todas las categorías</option>
                 <option value="electronics">Electrónicos</option>
                 <option value="clothing">Ropa</option>
                 <option value="food">Alimentos</option>
@@ -236,9 +326,14 @@ export function InventoryDashboard() {
 
       {/* Content */}
       <Routes>
-        <Route path="/" element={<InventoryList searchTerm={searchTerm} />} />
+        <Route path="/" element={<InventoryList searchTerm={searchTerm} filterCategory={filterCategory} />} />
+        <Route path="/products" element={<ProductsTable searchTerm={searchTerm} />} />
         <Route path="/movements" element={<StockMovements />} />
         <Route path="/alerts" element={<LowStockAlerts />} />
+        <Route path="/traceability" element={<Traceability />} />
+        <Route path="/inbound" element={<Inbound />} />
+        <Route path="/outbound" element={<Outbound />} />
+        <Route path="/cycle-counts" element={<CycleCounts />} />
       </Routes>
 
       {/* Product Import Modal */}

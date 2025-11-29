@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Package, TrendingUp, TrendingDown, AlertTriangle, DollarSign, BarChart3 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { formatCurrencyCompact } from '../../utils/currency';
 
 interface StatCardProps {
   title: string;
@@ -81,65 +82,117 @@ export function InventoryStats() {
       setLoading(true);
       setError(null);
 
-      // Obtener total de productos activos
-      const { data: productsData, error: productsError } = await supabase
-        .from('products')
-        .select('id, cost_price, selling_price, min_stock_level, reorder_point')
-        .eq('is_active', true);
+      // Preferir backend si está disponible (evita problemas de RLS en Supabase)
+      const backendUrl = import.meta.env.VITE_AUTH_BACKEND_URL || '';
+      const token = localStorage.getItem('app_token');
 
-      if (productsError) throw productsError;
-
-      // Obtener inventario actual
-      const { data: inventoryData, error: inventoryError } = await supabase
-        .from('inventory')
-        .select(`
-          quantity,
-          product_id,
-          products!inner(cost_price, selling_price, min_stock_level, reorder_point)
-        `);
-
-      if (inventoryError) throw inventoryError;
-
-      // Calcular métricas
-      const totalProducts = productsData?.length || 0;
-      
+      let totalProducts = 0; // aquí representará "total de unidades"
       let totalValue = 0;
       let lowStockCount = 0;
       let obsoleteCount = 0;
+      let averageRotation = 0;
+      let inventoryAccuracy = 0;
 
-      inventoryData?.forEach(item => {
-        const product = item.products;
-        const stockValue = item.quantity * (product.cost_price || 0);
-        totalValue += stockValue;
+      if (backendUrl && token) {
+        try {
+          const resp = await fetch(`${backendUrl}/metrics/dashboard`, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            totalValue = Number(data.inventory_total_value || 0);
+            // Usar conteo de productos distintos (ya lo obtenemos en otro efecto)
+            // Mantener totalProducts como 0 aquí; se puede reemplazar por distinctProductsCount si se desea.
+            lowStockCount = Number(data.alerts_active || 0);
+            averageRotation = Number(data.stock_rotation_x || 0);
+            inventoryAccuracy = Number(data.inventory_accuracy || 0);
+          } else {
+            throw new Error(`Backend metrics error: ${resp.statusText}`);
+          }
 
-        // Contar productos con stock bajo
-        if (item.quantity <= product.reorder_point) {
-          lowStockCount++;
+          // Calcular total de unidades en stock desde backend /inventory/list
+          const invResp = await fetch(`${backendUrl}/inventory/list?limit=5000`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {}
+          });
+          if (invResp.ok) {
+            const invJson = await invResp.json();
+            const rows = Array.isArray(invJson.inventory) ? invJson.inventory : [];
+            totalProducts = rows.reduce((sum: number, r: any) => sum + Number(r.quantity || 0), 0);
+          }
+        } catch (e) {
+          console.warn('Fallo al obtener métricas desde backend, usando Supabase:', e);
+          // Fallback a supabase directo si backend falla
+          const { data: productsData, error: productsError } = await supabase
+            .from('products')
+            .select('id, cost_price, selling_price, min_stock_level, reorder_point')
+            .eq('is_active', true);
+          if (productsError) throw productsError;
+
+          const { data: inventoryData, error: inventoryError } = await supabase
+            .from('inventory')
+            .select(`
+              quantity,
+              product_id,
+              products!inner(cost_price, selling_price, min_stock_level, reorder_point)
+            `);
+          if (inventoryError) throw inventoryError;
+
+          // total de unidades
+          totalProducts = (inventoryData || []).reduce((sum, item: any) => sum + Number(item.quantity || 0), 0);
+          inventoryData?.forEach(item => {
+            const product = item.products;
+            const unitCost = Number(product.cost_price || 0);
+            const qty = Number(item.quantity || 0);
+            totalValue += qty * unitCost;
+            if (qty <= Number(product.reorder_point || 0)) lowStockCount++;
+            if (qty > 0 && qty <= Number(product.min_stock_level || 0) * 0.1) obsoleteCount++;
+          });
         }
+      } else {
+        // Supabase directo (entornos sin backend)
+        const { data: productsData, error: productsError } = await supabase
+          .from('products')
+          .select('id, cost_price, selling_price, min_stock_level, reorder_point')
+          .eq('is_active', true);
+        if (productsError) throw productsError;
 
-        // Contar productos obsoletos (sin movimiento en 90 días - simplificado)
-        if (item.quantity > 0 && item.quantity <= product.min_stock_level * 0.1) {
-          obsoleteCount++;
-        }
-      });
+        const { data: inventoryData, error: inventoryError } = await supabase
+          .from('inventory')
+          .select(`
+            quantity,
+            product_id,
+            products!inner(cost_price, selling_price, min_stock_level, reorder_point)
+          `);
+        if (inventoryError) throw inventoryError;
+
+        // total de unidades
+        totalProducts = (inventoryData || []).reduce((sum, item: any) => sum + Number(item.quantity || 0), 0);
+        inventoryData?.forEach(item => {
+          const product = item.products;
+          const unitCost = Number(product.cost_price || 0);
+          const qty = Number(item.quantity || 0);
+          totalValue += qty * unitCost;
+          if (qty <= Number(product.reorder_point || 0)) lowStockCount++;
+          if (qty > 0 && qty <= Number(product.min_stock_level || 0) * 0.1) obsoleteCount++;
+        });
+      }
 
       // Obtener movimientos recientes para calcular rotación
       const thirtyDaysAgo = new Date();
       thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-      const { data: movementsData, error: movementsError } = await supabase
-        .from('inventory_movements')
-        .select('quantity, movement_type')
-        .gte('created_at', thirtyDaysAgo.toISOString())
-        .eq('movement_type', 'OUT');
-
-      if (movementsError) throw movementsError;
-
-      const totalOutbound = movementsData?.reduce((sum, movement) => sum + Math.abs(movement.quantity), 0) || 0;
-      const averageRotation = totalValue > 0 ? (totalOutbound * 12) / totalValue : 0; // Anualizado
-
-      // Calcular precisión de inventario (simplificado al 98.7% por ahora)
-      const inventoryAccuracy = 98.7;
+      if (!backendUrl || !token) {
+        const { data: movementsData, error: movementsError } = await supabase
+          .from('inventory_movements')
+          .select('quantity, movement_type')
+          .gte('created_at', thirtyDaysAgo.toISOString())
+          .eq('movement_type', 'OUT');
+        if (movementsError) throw movementsError;
+        const totalOutbound = movementsData?.reduce((sum, movement) => sum + Math.abs(movement.quantity), 0) || 0;
+        averageRotation = totalValue > 0 ? (totalOutbound * 12) / totalValue : 0; // Anualizado
+        // Precisión simplificada si no hay backend
+        inventoryAccuracy = 98.7;
+      }
 
       setMetrics({
         totalProducts,
@@ -192,9 +245,9 @@ export function InventoryStats() {
             // Fallback a supabase si backend no disponible
             const { data, error } = await supabase
               .from('products')
-              .select('id', { count: 'exact', head: true })
+              .select('id')
               .eq('is_active', true);
-            if (!error) setDistinctProductsCount((data as any)?.length || 0);
+            if (!error) setDistinctProductsCount(Array.isArray(data) ? data.length : 0);
           }
         } else {
           // Fallback: contar productos activos vía supabase
@@ -204,7 +257,7 @@ export function InventoryStats() {
             .eq('is_active', true);
           if (!error) setDistinctProductsCount(data?.length || 0);
         }
-      } catch (e) {
+      } catch {
         // En caso de error, mantener en 0 sin romper UI
         console.warn('No se pudo obtener conteo de productos distintos');
       } finally {
@@ -215,12 +268,7 @@ export function InventoryStats() {
   }, []);
 
   const formatCurrency = (value: number) => {
-    if (value >= 1000000) {
-      return `€${(value / 1000000).toFixed(1)}M`;
-    } else if (value >= 1000) {
-      return `€${(value / 1000).toFixed(0)}K`;
-    }
-    return `€${value.toFixed(0)}`;
+    return formatCurrencyCompact(value);
   };
 
   const formatNumber = (value: number) => {

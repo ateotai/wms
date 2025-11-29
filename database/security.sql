@@ -309,6 +309,13 @@ CREATE POLICY "Managers can manage purchase order items" ON purchase_order_items
 CREATE POLICY "Users can view sales orders" ON sales_orders
     FOR SELECT USING (auth.uid() IS NOT NULL);
 
+-- Política de desarrollo: permitir lectura a role anon
+DROP POLICY IF EXISTS "Sales orders dev anon select" ON sales_orders;
+CREATE POLICY "Sales orders dev anon select" ON sales_orders
+    FOR SELECT
+    TO anon
+    USING (true);
+
 -- Operadores y superiores pueden gestionar órdenes de venta
 CREATE POLICY "Operators can manage sales orders" ON sales_orders
     FOR ALL USING (
@@ -325,6 +332,13 @@ CREATE POLICY "Operators can manage sales orders" ON sales_orders
 -- Usuarios pueden ver items de órdenes de venta
 CREATE POLICY "Users can view sales order items" ON sales_order_items
     FOR SELECT USING (auth.uid() IS NOT NULL);
+
+-- Política de desarrollo: permitir lectura a role anon
+DROP POLICY IF EXISTS "Sales order items dev anon select" ON sales_order_items;
+CREATE POLICY "Sales order items dev anon select" ON sales_order_items
+    FOR SELECT
+    TO anon
+    USING (true);
 
 -- Operadores pueden gestionar items de órdenes de venta
 CREATE POLICY "Operators can manage sales order items" ON sales_order_items
@@ -343,6 +357,13 @@ CREATE POLICY "Operators can manage sales order items" ON sales_order_items
 CREATE POLICY "Users can view transfers" ON transfers
     FOR SELECT USING (auth.uid() IS NOT NULL);
 
+-- Política de desarrollo: permitir lectura a role anon
+DROP POLICY IF EXISTS "Transfers dev anon select" ON transfers;
+CREATE POLICY "Transfers dev anon select" ON transfers
+    FOR SELECT
+    TO anon
+    USING (true);
+
 -- Operadores y superiores pueden gestionar transferencias
 CREATE POLICY "Operators can manage transfers" ON transfers
     FOR ALL USING (
@@ -359,6 +380,13 @@ CREATE POLICY "Operators can manage transfers" ON transfers
 -- Usuarios pueden ver items de transferencias
 CREATE POLICY "Users can view transfer items" ON transfer_items
     FOR SELECT USING (auth.uid() IS NOT NULL);
+
+-- Política de desarrollo: permitir lectura a role anon
+DROP POLICY IF EXISTS "Transfer items dev anon select" ON transfer_items;
+CREATE POLICY "Transfer items dev anon select" ON transfer_items
+    FOR SELECT
+    TO anon
+    USING (true);
 
 -- Operadores pueden gestionar items de transferencias
 CREATE POLICY "Operators can manage transfer items" ON transfer_items

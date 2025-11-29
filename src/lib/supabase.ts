@@ -1,10 +1,15 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://jffaljgvdigkyxjksnot.supabase.co';
-const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpmZmFsamd2ZGlna3l4amtzbm90Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTk0NDEwODMsImV4cCI6MjA3NTAxNzA4M30.W6JVxYFn226MhuIXwa8aP-cLHIhunKyLOdtXNQ2NHLA';
+// Usa exclusivamente las variables de entorno reales.
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 
-// Crear cliente sin usar características de autenticación (sin sesión ni auto-refresh)
-export const supabase = createClient(supabaseUrl, supabaseKey, {
+if (!supabaseUrl || !supabaseKey) {
+  // Falla rápido y de forma visible si faltan claves, para no ocultar problemas de conexión
+  console.error('Faltan variables de entorno de Supabase: VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY.');
+}
+
+export const supabase = createClient(supabaseUrl as string, supabaseKey as string, {
   auth: {
     persistSession: false,
     autoRefreshToken: false,

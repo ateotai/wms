@@ -1,11 +1,7 @@
 import React, { useState } from 'react';
+import { formatCurrency } from '../../utils/currency';
 import { 
-  PieChart, 
-  BarChart3, 
   Package, 
-  DollarSign, 
-  TrendingUp, 
-  Filter,
   Download,
   RefreshCw,
   Search,
@@ -17,7 +13,6 @@ import {
 } from 'lucide-react';
 
 export function ABCAnalysis() {
-  const [selectedPeriod, setSelectedPeriod] = useState('month');
   const [selectedCategory, setSelectedCategory] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [sortBy, setSortBy] = useState('revenue');
@@ -163,12 +158,7 @@ export function ABCAnalysis() {
     }
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('es-ES', {
-      style: 'currency',
-      currency: 'EUR'
-    }).format(amount);
-  };
+  // Usar utilidad global para formateo de moneda
 
   const recommendations = [
     {

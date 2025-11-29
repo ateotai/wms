@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
+import { BatchLabelModal } from './BatchLabelModal';
 import { 
   Package, 
   Users, 
@@ -13,7 +14,8 @@ import {
   Trash2,
   ShoppingCart,
   MapPin,
-  BarChart3
+  BarChart3,
+  Printer
 } from 'lucide-react';
 
 interface BatchOrder {
@@ -51,19 +53,33 @@ interface BatchItem {
   expiryDate?: string | null;
   pickedQuantity: number;
   status: 'picking_pending' | 'picking_confirmed' | 'cancelled';
+  // Características del producto y detalles de ubicación
+  weight?: number | null;
+  dimensions?: string | null;
+  barcode?: string | null;
+  locationDetails?: {
+    code: string | null;
+    zone?: string | null;
+    aisle?: string | null;
+    rack?: string | null;
+    shelf?: string | null;
+    bin?: string | null;
+  } | null;
 }
 
 export function BatchPicking() {
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'in_progress' | 'completed' | 'cancelled'>('all');
   const [filterPriority, setFilterPriority] = useState<'all' | 'high' | 'medium' | 'low'>('all');
   const [refreshToken, setRefreshToken] = useState(0);
+  const [showBatchLabel, setShowBatchLabel] = useState(false);
+  const [labelBatch, setLabelBatch] = useState<Batch | null>(null);
 
   useEffect(() => {
-    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
     const buildQuery = () => {
       const qs: string[] = [];
       if (filterStatus !== 'all') qs.push(`status=${filterStatus}`);
@@ -113,7 +129,7 @@ export function BatchPicking() {
 
   // Suscripción SSE para refrescar en tiempo real
   useEffect(() => {
-    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
     const es = new EventSource(`${AUTH_BACKEND_URL}/picking/batches/stream`);
     es.onmessage = () => setRefreshToken((t) => t + 1);
     es.onerror = () => {
@@ -179,7 +195,7 @@ export function BatchPicking() {
   };
 
   const handleStartBatch = async (batchId: string) => {
-    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
     try {
       const resp = await fetch(`${AUTH_BACKEND_URL}/picking/batches/${batchId}/start`, { 
         method: 'POST',
@@ -193,7 +209,7 @@ export function BatchPicking() {
   };
 
   const handleCompleteBatch = async (batchId: string) => {
-    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
     try {
       const resp = await fetch(`${AUTH_BACKEND_URL}/picking/batches/${batchId}/complete`, { 
         method: 'POST',
@@ -224,7 +240,7 @@ export function BatchPicking() {
   // Cargar órdenes disponibles cuando se abre el modal
   useEffect(() => {
     if (!showCreateForm) return;
-    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
     const loadOrders = async () => {
       try {
         const resp = await fetch(`${AUTH_BACKEND_URL}/picking/tasks?status=pending`, {
@@ -255,7 +271,7 @@ export function BatchPicking() {
   // Cargar ítems del lote cuando se abre el modal de detalles
   useEffect(() => {
     if (!showDetails || !selectedBatch) return;
-    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
     let mounted = true;
     const loadItems = async () => {
       try {
@@ -264,7 +280,7 @@ export function BatchPicking() {
         });
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const json = await resp.json();
-        const items: BatchItem[] = Array.isArray(json.items) ? json.items.map((i: any) => ({
+        let items: BatchItem[] = Array.isArray(json.items) ? json.items.map((i: any) => ({
           id: String(i.id),
           productId: String(i.productId || ''),
           sku: String(i.sku || ''),
@@ -275,7 +291,29 @@ export function BatchPicking() {
           expiryDate: i.expiryDate ?? null,
           pickedQuantity: Number(i.pickedQuantity || 0) || 0,
           status: (i.status || 'picking_pending') as BatchItem['status'],
+          weight: typeof i.weight !== 'undefined' ? (i.weight === null ? null : Number(i.weight)) : undefined,
+          dimensions: i.dimensions ?? undefined,
+          barcode: i.barcode ?? undefined,
+          locationDetails: i.locationDetails ?? null,
         })) : [];
+        // Asegurar orden por ubicación en cliente (por si el backend cambia)
+        const locKey = (ld: BatchItem['locationDetails']) => {
+          if (!ld) return '~~~~~';
+          const parts = [ld.zone, ld.aisle, ld.rack, ld.shelf, ld.bin, ld.code]
+            .map(x => (x || '').toString().padStart(4, ' '));
+          return parts.join('|');
+        };
+        items = items.sort((a, b) => {
+          const ka = locKey(a.locationDetails);
+          const kb = locKey(b.locationDetails);
+          if (ka < kb) return -1;
+          if (ka > kb) return 1;
+          const sa = (a.sku || '').toString();
+          const sb = (b.sku || '').toString();
+          if (sa < sb) return -1;
+          if (sa > sb) return 1;
+          return 0;
+        });
         if (!mounted) return;
         setBatchItems(items);
         // Inicializar inputs y temporizadores
@@ -352,7 +390,7 @@ export function BatchPicking() {
 
   const confirmItemQuantity = async (item: BatchItem, qty: number) => {
     if (!selectedBatch || qty <= 0) return;
-    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
     try {
       const resp = await fetch(`${AUTH_BACKEND_URL}/picking/batches/${selectedBatch.id}/items/${item.id}/confirm`, {
         method: 'POST',
@@ -441,7 +479,7 @@ export function BatchPicking() {
       setSelectedSkus([]);
     }
     // Consultar inventario resumido por SKU al cambiar el conjunto
-    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
     const fetchInventory = async () => {
       try {
         if (!arr.length) { setSkuInventory({}); return; }
@@ -562,15 +600,16 @@ export function BatchPicking() {
   }, [skuAggregates, skuLocationOptions, skuInventory]);
 
   const handleCreateBatch = async () => {
-    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8080' : '');
     try {
       if (selectedOrderIds.length === 0) {
         setError('Selecciona al menos una orden');
         return;
       }
+      const fallbackAssignedTo = (formAssignedTo || user?.full_name || user?.email || '').trim();
       const payload = {
-        assignedTo: formAssignedTo || undefined,
-        assigned_to_user_id: assignedUserId || undefined,
+        assignedTo: fallbackAssignedTo ? fallbackAssignedTo : undefined,
+        assigned_to_user_id: assignedUserId || user?.id || undefined,
         zone: formZone || undefined,
         order_ids: selectedOrderIds,
         priority: formPriority,
@@ -605,7 +644,7 @@ export function BatchPicking() {
   // Búsqueda en tiempo real de usuarios para "Asignar a"
   useEffect(() => {
     const q = (userQuery || '').trim();
-    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8080' : '');
     const ctrl = new AbortController();
     const id = setTimeout(async () => {
       try {
@@ -636,7 +675,7 @@ export function BatchPicking() {
       {/* Header Actions */}
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-xl font-semibold text-gray-900">Picking por Lotes</h2>
+          <h2 className="text-xl font-semibold text-gray-900">Ola por SKU</h2>
           <p className="text-gray-600">Agrupa múltiples órdenes para optimizar el picking</p>
         </div>
         <button
@@ -644,7 +683,7 @@ export function BatchPicking() {
           className="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700"
         >
           <Plus className="w-4 h-4 mr-2" />
-          Crear Lote
+          Ola por SKU
         </button>
       </div>
 
@@ -841,6 +880,15 @@ export function BatchPicking() {
                     >
                       <Eye className="w-4 h-4" />
                     </button>
+
+                    {/* Imprimir etiqueta QR + código de barra */}
+                    <button
+                      onClick={() => { setLabelBatch(batch); setShowBatchLabel(true); }}
+                      className="p-2 text-gray-400 hover:text-gray-700"
+                      title="Imprimir etiqueta"
+                    >
+                      <Printer className="w-4 h-4" />
+                    </button>
                     
                     {batch.status === 'pending' && (
                       <button
@@ -969,10 +1017,38 @@ export function BatchPicking() {
                             </div>
                             <div className="mt-1 text-sm text-gray-600">
                               <span className="font-medium">Ubicación:</span> {item.sourceLocation || '—'}
+                              {item.locationDetails && (
+                                <span className="ml-2 text-xs text-gray-500">
+                                  [
+                                  {item.locationDetails.zone || '-'} /
+                                  {item.locationDetails.aisle || '-'} /
+                                  {item.locationDetails.rack || '-'} /
+                                  {item.locationDetails.shelf || '-'} /
+                                  {item.locationDetails.bin || '-'}
+                                  ]
+                                </span>
+                              )}
                             </div>
                             <div className="mt-2 text-sm text-gray-600">
                               <span className="font-medium">Cantidad:</span> {item.pickedQuantity}/{item.quantity}
                               <span className="ml-3 font-medium">Avance:</span> {pct}%
+                            </div>
+                            <div className="mt-2 text-xs text-gray-700 space-x-3">
+                              {item.unit && (
+                                <span className="inline-block px-2 py-0.5 rounded bg-gray-100 text-gray-700">UM: {item.unit}</span>
+                              )}
+                              {typeof item.weight !== 'undefined' && item.weight !== null && (
+                                <span className="inline-block px-2 py-0.5 rounded bg-gray-100 text-gray-700">Peso: {item.weight}</span>
+                              )}
+                              {item.dimensions && (
+                                <span className="inline-block px-2 py-0.5 rounded bg-gray-100 text-gray-700">Dimensiones: {item.dimensions}</span>
+                              )}
+                              {item.barcode && (
+                                <span className="inline-block px-2 py-0.5 rounded bg-gray-100 text-gray-700">Barcode: {item.barcode}</span>
+                              )}
+                              {item.expiryDate && (
+                                <span className="inline-block px-2 py-0.5 rounded bg-gray-100 text-gray-700">Vence: {item.expiryDate}</span>
+                              )}
                             </div>
                             <div className="mt-2 w-full bg-gray-200 rounded-full h-2">
                               <div className={`h-2 rounded-full ${done ? 'bg-green-500' : 'bg-blue-500'}`} style={{ width: `${pct}%` }} />
@@ -1034,6 +1110,22 @@ export function BatchPicking() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Batch Label Modal */}
+      {showBatchLabel && labelBatch && (
+        <BatchLabelModal
+          isOpen={showBatchLabel}
+          onClose={() => { setShowBatchLabel(false); setLabelBatch(null); }}
+          batch={{
+            id: labelBatch.id,
+            name: labelBatch.name,
+            assignedTo: labelBatch.assignedTo,
+            zone: labelBatch.zone,
+            totalItems: labelBatch.totalItems,
+            orders: labelBatch.orders,
+          }}
+        />
       )}
 
       {/* Create Batch Form Modal */}

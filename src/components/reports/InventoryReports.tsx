@@ -1,17 +1,15 @@
 import React, { useState } from 'react';
+import { formatCurrency } from '../../utils/currency';
 import { 
   Package, 
   TrendingUp, 
-  TrendingDown, 
   AlertTriangle, 
   Clock, 
-  BarChart3,
   Download,
   RefreshCw,
   Filter,
   Search,
   Eye,
-  Calendar,
   ArrowUp,
   ArrowDown,
   Minus
@@ -41,7 +39,7 @@ export function InventoryReports() {
   const inventoryStats = [
     {
       title: 'Valor Total Inventario',
-      value: '€2,450,000',
+      value: formatCurrency(2450000),
       change: 5.2,
       trend: 'up',
       icon: Package,
@@ -235,12 +233,7 @@ export function InventoryReports() {
     }
   };
 
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('es-ES', {
-      style: 'currency',
-      currency: 'EUR'
-    }).format(amount);
-  };
+  // Usar utilidad global para formateo de moneda
 
   const getTrendIcon = (trend: string) => {
     switch (trend) {
