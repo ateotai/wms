@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import {
   ZoomIn,
   ZoomOut,
@@ -118,9 +118,9 @@ export function WarehouseMap() {
             .from('locations')
             .select('id, warehouse_id, code, name, zone, aisle, rack, shelf, bin, capacity, is_active, location_type');
           if (!locError && data) {
-            dbLocations = (data as any[]) as DBLocation[];
+            dbLocations = Array.isArray(data) ? (data as unknown as DBLocation[]) : [];
           }
-        } catch {}
+        } catch { void 0; }
 
         if (!dbLocations || dbLocations.length === 0) {
           const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
@@ -133,19 +133,19 @@ export function WarehouseMap() {
               if (resp.ok) {
                 const json = await resp.json();
                 const list = Array.isArray(json.locations) ? json.locations : [];
-                dbLocations = list.map((l: any) => ({
+                dbLocations = list.map((l: Record<string, unknown>) => ({
                   id: String(l.id),
-                  warehouse_id: l.warehouse_id != null ? String(l.warehouse_id) : null,
-                  code: String(l.code ?? ''),
-                  name: l.name != null ? String(l.name) : null,
-                  zone: l.zone != null ? String(l.zone) : null,
-                  aisle: l.aisle != null ? String(l.aisle) : null,
-                  rack: l.rack != null ? String(l.rack) : null,
-                  shelf: l.shelf != null ? String(l.shelf) : null,
-                  bin: l.bin != null ? String(l.bin) : null,
-                  location_type: l.location_type ?? undefined,
-                  capacity: typeof l.capacity === 'number' ? l.capacity : Number(l.capacity ?? 0),
-                  is_active: l.is_active ?? true
+                  warehouse_id: l.warehouse_id != null ? String(l.warehouse_id as string) : null,
+                  code: l.code != null ? String(l.code as string) : '',
+                  name: l.name != null ? String(l.name as string) : null,
+                  zone: l.zone != null ? String(l.zone as string) : null,
+                  aisle: l.aisle != null ? String(l.aisle as string) : null,
+                  rack: l.rack != null ? String(l.rack as string) : null,
+                  shelf: l.shelf != null ? String(l.shelf as string) : null,
+                  bin: l.bin != null ? String(l.bin as string) : null,
+                  location_type: (l.location_type as DBLocation['location_type']) ?? undefined,
+                  capacity: typeof l.capacity === 'number' ? (l.capacity as number) : Number((l.capacity as unknown) ?? 0),
+                  is_active: (l.is_active as boolean | null) ?? true
                 }));
               }
             } catch (e) {
@@ -161,13 +161,13 @@ export function WarehouseMap() {
             .from('inventory')
             .select('location_id, quantity, reserved_quantity, available_quantity');
           if (!invError && data) {
-            dbInventory = (data as any[]) as InventoryByLocation[];
+            dbInventory = Array.isArray(data) ? (data as unknown as InventoryByLocation[]) : [];
           }
-        } catch {}
+        } catch { void 0; }
 
         // Si no hay inventario desde Supabase, intentar backend
         // Nota: el endpoint /inventory/list suele incluir location_id; si no, se utilizará location_code
-        let invByCode = new Map<string, number>();
+        const invByCode = new Map<string, number>();
         if (!dbInventory || dbInventory.length === 0) {
           const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
           const token = localStorage.getItem('app_token');
@@ -182,19 +182,19 @@ export function WarehouseMap() {
                 const json = await resp.json();
                 const rows = Array.isArray(json.inventory) ? json.inventory : [];
                 const tmp: InventoryByLocation[] = [];
-                rows.forEach((r: any) => {
-                  const hasId = r.location_id != null || r.locationId != null;
-                  const locId = hasId ? String(r.location_id ?? r.locationId) : null;
-                  const available = Number(r.available_quantity ?? r.availableQuantity ?? r.quantity ?? 0);
+                rows.forEach((r: Record<string, unknown>) => {
+                  const hasId = (r as { location_id?: unknown; locationId?: unknown }).location_id != null || (r as { locationId?: unknown }).locationId != null;
+                  const locId = hasId ? String(((r as { location_id?: unknown }).location_id ?? (r as { locationId?: unknown }).locationId) as string) : null;
+                  const available = Number(((r as { available_quantity?: unknown }).available_quantity ?? (r as { availableQuantity?: unknown }).availableQuantity ?? (r as { quantity?: unknown }).quantity) as number | string | undefined ?? 0);
                   if (hasId) {
                     tmp.push({
                       location_id: locId,
-                      quantity: Number(r.quantity ?? 0),
-                      reserved_quantity: Number(r.reserved_quantity ?? r.reservedQuantity ?? 0),
+                      quantity: Number(((r as { quantity?: unknown }).quantity as number | string | undefined) ?? 0),
+                      reserved_quantity: Number(((r as { reserved_quantity?: unknown }).reserved_quantity ?? (r as { reservedQuantity?: unknown }).reservedQuantity) as number | string | undefined ?? 0),
                       available_quantity: available
                     });
                   } else {
-                    const codeNorm = String(r.location_code ?? r.locations?.code ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
+                    const codeNorm = String(((r as { location_code?: unknown }).location_code ?? ((r as { locations?: { code?: unknown } | null }).locations?.code)) ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
                     if (codeNorm) invByCode.set(codeNorm, (invByCode.get(codeNorm) || 0) + available);
                   }
                 });
@@ -332,7 +332,7 @@ export function WarehouseMap() {
           const keyPrefix = `${aisle.zoneId}__${aisle.id}__`;
           const racksForAisle = Array.from(rackAgg.entries())
             .filter(([key]) => key.startsWith(keyPrefix))
-            .map(([_, agg]) => agg);
+            .map(([, agg]) => agg);
           const n = racksForAisle.length;
           if (n === 0) {
             nextRacksByAisle[`${aisle.zoneId}__${aisle.id}`] = [];
@@ -381,7 +381,7 @@ export function WarehouseMap() {
         });
 
         const nextPositionsByRack: Record<string, RackPositionDerived[]> = {};
-        Object.entries(nextRacksByAisle).forEach(([aisleKey, rackBoxes]) => {
+        Object.entries(nextRacksByAisle).forEach(([, rackBoxes]) => {
           rackBoxes.forEach((box) => {
             const rackKey = `${box.zoneId}__${box.aisleId}__${box.id}`;
             const locs = locsByRack.get(rackKey) || [];
@@ -703,7 +703,7 @@ export function WarehouseMap() {
                   transform: `scale(${zoom})`,
                   transformOrigin: 'top left',
                   width: `${(function(){
-                    const baseRight = 40; const topMargin = 60; const leftMarginZones = 40; const leftMarginDefault = 20;
+                    const baseRight = 40; const leftMarginZones = 40; const leftMarginDefault = 20;
                     if (viewMode === 'zones') {
                       const cols = 4; const cellW = 200; const gapX = 16; const usedCols = Math.max(1, Math.min(cols, zones.length || cols));
                       const w = leftMarginZones + usedCols * (cellW + gapX) - gapX + baseRight; 

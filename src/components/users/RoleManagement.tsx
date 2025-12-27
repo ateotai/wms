@@ -1,18 +1,18 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { 
   Shield, 
-  Users, 
+  
   Plus, 
   Edit, 
   Trash2, 
   Save, 
   X,
   CheckCircle,
-  AlertCircle,
+  
   Eye,
-  Settings,
+  
   Lock,
-  Unlock
+  
 } from 'lucide-react';
 import { PermissionsMatrix } from './PermissionsMatrix';
 

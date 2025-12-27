@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { 
   Save, 
@@ -10,10 +10,7 @@ import {
   Eye, 
   EyeOff,
   AlertCircle,
-  CheckCircle,
-  Building,
-  MapPin,
-  RefreshCw
+  Building
 } from 'lucide-react';
 const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
 
@@ -88,13 +85,7 @@ export function UserForm() {
     'IT'
   ];
 
-  const locations = [
-    'Almacén Principal',
-    'Almacén Secundario',
-    'Centro de Distribución Norte',
-    'Centro de Distribución Sur',
-    'Oficinas Centrales'
-  ];
+  
 
   const permissions = [
     { id: 'inventory_read', label: 'Ver inventario', category: 'Inventario' },
@@ -244,7 +235,7 @@ export function UserForm() {
     }
   };
 
-  const handleInputChange = (field: keyof UserFormData, value: string | string[]) => {
+  const handleInputChange = (field: keyof UserFormData, value: string | string[] | boolean) => {
     setFormData(prev => ({ ...prev, [field]: value }));
     if (errors[field]) {
       setErrors(prev => ({ ...prev, [field]: '' }));

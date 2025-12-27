@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { 
   Package, 
@@ -7,7 +7,6 @@ import {
   CheckCircle,
   Search,
   Filter,
-  Plus,
   TrendingUp,
   TrendingDown,
   Calendar
@@ -18,10 +17,20 @@ import { ReceivingTasks } from './ReceivingTasks';
 import { Appointments } from './Appointments';
 import { ReceptionControl } from './ReceptionControl'
 
-export const ReceptionDashboard: React.FC = () => {
+export function ReceptionDashboard() {
   const location = useLocation();
 
-  const [metrics, setMetrics] = useState<any | null>(null);
+  interface ReceptionMetrics {
+    pendingOrders?: number;
+    pendingChange?: number;
+    asnReceived?: number;
+    asnChange?: number;
+    inReceiving?: number;
+    inReceivingChange?: number;
+    completedToday?: number;
+    completedChange?: number;
+  }
+  const [metrics, setMetrics] = useState<ReceptionMetrics | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL;
 
@@ -37,7 +46,7 @@ export const ReceptionDashboard: React.FC = () => {
         if (resp.ok) {
           const data = await resp.json();
           setMetrics(data);
-        }
+}
       } catch (e) {
         console.error('Error cargando métricas de recepción:', e);
       } finally {
@@ -167,7 +176,7 @@ export const ReceptionDashboard: React.FC = () => {
               <FileText className="w-4 h-4 mr-2" />
               Órdenes de Compra
             </Link>
-            <Link
+            {/* <Link
               to="/reception/asn"
               className={`flex items-center px-4 py-4 text-sm font-medium border-b-2 ${
                 isActiveTab('/reception/asn')
@@ -177,7 +186,7 @@ export const ReceptionDashboard: React.FC = () => {
             >
               <Truck className="w-4 h-4 mr-2" />
               ASN
-            </Link>
+            </Link> */}
             <Link
               to="/reception/appointments"
               className={`flex items-center px-4 py-4 text-sm font-medium border-b-2 ${
@@ -189,7 +198,7 @@ export const ReceptionDashboard: React.FC = () => {
               <Calendar className="w-4 h-4 mr-2" />
               Citas
             </Link>
-            <Link
+            {/* <Link
               to="/reception/receiving"
               className={`flex items-center px-4 py-4 text-sm font-medium border-b-2 ${
                 isActiveTab('/reception/receiving')
@@ -199,7 +208,7 @@ export const ReceptionDashboard: React.FC = () => {
             >
               <Package className="w-4 h-4 mr-2" />
               Tareas de Recepción
-            </Link>
+            </Link> */}
             <Link
               to="/reception/control"
               className={`flex items-center px-4 py-4 text-sm font-medium border-b-2 ${

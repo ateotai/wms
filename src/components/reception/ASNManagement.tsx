@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   Truck, 
   Package, 
@@ -39,7 +39,7 @@ interface ASN {
   dockDoor?: string;
 }
 
-export const ASNManagement: React.FC = () => {
+export function ASNManagement() {
   const [selectedASN, setSelectedASN] = useState<ASN | null>(null);
   const [showASNModal, setShowASNModal] = useState(false);
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -435,10 +435,12 @@ export const ASNManagement: React.FC = () => {
                   )}
                   <div>
                     <span className="font-medium">Estado:</span>
-                    <span className={`ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(selectedASN.status)}`}>
-                      {React.createElement(getStatusIcon(selectedASN.status), { className: "w-3 h-3 mr-1" })}
-                      {getStatusText(selectedASN.status)}
-                    </span>
+                    {(() => { const Icon = getStatusIcon(selectedASN.status); return (
+                      <span className={`ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(selectedASN.status)}`}>
+                        <Icon className="w-3 h-3 mr-1" />
+                        {getStatusText(selectedASN.status)}
+                      </span>
+                    ); })()}
                   </div>
                 </div>
                 {selectedASN.notes && (
@@ -615,4 +617,4 @@ export const ASNManagement: React.FC = () => {
       )}
     </div>
   );
-};
+}

@@ -2,12 +2,17 @@
 const path = require('path');
 // Cargar primero variables desde server/.env
 try {
-  require('dotenv').config({ path: path.resolve(__dirname, '.env') });
+  const result = require('dotenv').config({ path: path.resolve(__dirname, '.env') });
+  if (result.parsed) console.log('Loaded server/.env:', result.parsed.PORT);
 } catch {}
 // Cargar .env desde la raíz del proyecto como fallback (por ejemplo variables VITE_)
 try {
-  require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
+  const result = require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
+  if (result.parsed) console.log('Loaded ../.env:', result.parsed.PORT);
 } catch {}
+
+console.log('Final process.env.PORT:', process.env.PORT);
+
 const express = require('express');
 const cors = require('cors');
 const jwt = require('jsonwebtoken');
@@ -37,6 +42,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_API_KEY);
 console.log(`[Auth backend] Usando clave ${SUPABASE_SERVICE_ROLE_KEY ? 'service role' : 'anon'} para Supabase`);
 const ERP_RESTRICT_CATALOG_TO_PO = (process.env.ERP_RESTRICT_CATALOG_TO_PO || 'true') !== 'false';
 const CREATE_VIRTUAL_LOCATIONS_ON_BOOT = (process.env.CREATE_VIRTUAL_LOCATIONS_ON_BOOT || 'true') !== 'false';
+const CREATE_DEFAULT_ERP_CONNECTORS_ON_BOOT = (process.env.CREATE_DEFAULT_ERP_CONNECTORS_ON_BOOT || 'false') !== 'false';
 
 // Restringe el catálogo de productos a los presentes en items de órdenes de compra (DEV)
 async function restrictProductsToPoItems() {
@@ -88,7 +94,7 @@ app.use(
       if (isAllowedOrigin(origin)) return callback(null, true);
       return callback(new Error('Not allowed by CORS'));
     },
-    methods: ['GET', 'POST', 'PUT', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: false,
   })
@@ -99,7 +105,7 @@ app.options('*', cors({
     if (isAllowedOrigin(origin)) return callback(null, true);
     return callback(new Error('Not allowed by CORS'));
   },
-  methods: ['GET', 'POST', 'PUT', 'OPTIONS'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use(express.json());
@@ -151,12 +157,14 @@ app.post('/push/subscribe', async (req, res) => {
     } catch (e) {
       console.warn('[WebPush] No se pudo guardar en BD push_subscriptions:', e?.message || e);
     }
-    return res.json({ ok: true });
+  return res.json({ ok: true });
   } catch (e) {
     console.error('Error registrando suscripción push:', e);
     return res.status(500).json({ error: 'Error interno registrando suscripción' });
   }
 });
+
+const memoryConnectors = new Map();
 
 // Confirmar picking de un ítem del lote: actualiza picked_quantity, libera reserva y registra movimiento OUT
 app.post('/picking/batches/:batchId/items/:itemId/confirm', authMiddleware, async (req, res) => {
@@ -329,6 +337,76 @@ app.get('/health', (_req, res) => {
   });
 });
 
+async function ensureDefaultERPConnectors() {
+  try {
+    const { data } = await supabase
+      .from('erp_connectors')
+      .select('id,name,type,endpoint');
+    const rows = Array.isArray(data) ? data : [];
+    const hasSap = rows.some(r => String(r.name || r.type || '').toLowerCase().includes('sap b1'));
+    const hasVe = rows.some(r => String(r.name || '').toLowerCase() === 've');
+    const nowIso = new Date().toISOString();
+    const desiredEndpoint = `http://localhost:${APP_PORT}/mock/sap`;
+    if (!hasSap) {
+      await supabase
+        .from('erp_connectors')
+        .insert([{
+          name: 'SAP B1',
+          type: 'SAP B1',
+          endpoint: desiredEndpoint,
+          username: null,
+          api_key: null,
+          version: '1.0',
+          sync_interval: 60,
+          sync_type: 'manual',
+          status: 'active',
+          last_sync: null,
+          next_sync: null,
+          records_processed: 0,
+          error_count: 0,
+          auto_sync: false,
+          connection_settings: { direction: 'entrada', supportedTargets: ['products', 'purchase_orders'] },
+          inventory_mapping: { productIdField: 'ItemCode' },
+          is_active: true,
+          created_at: nowIso,
+          updated_at: nowIso,
+          created_by: null,
+        }]);
+    }
+    if (!hasVe) {
+      const candidates = ['API Personalizada', 'API', 'Custom', 'VE', 'ERP', 'SAP B1'];
+      for (const ct of candidates) {
+        const ins = await supabase
+          .from('erp_connectors')
+          .insert([{
+            name: 've',
+            type: ct,
+            endpoint: desiredEndpoint,
+            username: null,
+            api_key: null,
+            version: '1.0',
+            sync_interval: 60,
+            sync_type: 'manual',
+            status: 'active',
+            last_sync: new Date().toISOString(),
+            next_sync: null,
+            records_processed: 0,
+            error_count: 0,
+            auto_sync: false,
+            connection_settings: { direction: 'entrada', supportedTargets: ['products'] },
+            inventory_mapping: { productIdField: 'ItemCode' },
+            is_active: true,
+            created_at: nowIso,
+            updated_at: nowIso,
+            created_by: null,
+          }])
+          .select('id')
+          .maybeSingle();
+        if (!ins.error && ins.data) break;
+      }
+    }
+  } catch {}
+}
 // -----------------------------------------------
 // Productos: fallback para obtener detalles por IDs (sku, name, description)
 // Útil cuando el frontend (rol anon) no puede hacer join por RLS
@@ -377,15 +455,28 @@ app.post('/erp/sap/test', async (req, res) => {
     function buildSapProductSetUrl(base, top) {
       let b = String(base || '').trim();
       b = b.replace(/\/$/, '');
-      // Base esperada: https://sapes5.sap.com/sap/opu/odata/IWBEP/GWSAMPLE_BASIC
-      // Añadimos el recurso ProductSet
       const t = Number(top) || 1;
-      let url = `${b}/ProductSet?$top=${t}&$format=json`;
-      return url;
+      
+      // Si la URL ya parece específica (tiene Acknowledge, ProductSet, PurchaseOrders, etc.), no anexar nada
+      if (/\/ProductSet$/i.test(b) || /\/PurchaseOrders/i.test(b) || /\/Acknowledge/i.test(b)) {
+        const separator = b.includes('?') ? '&' : '?';
+        return `${b}${separator}$top=${t}&$format=json`;
+      }
+
+      // Base esperada: https://sapes5.sap.com/sap/opu/odata/IWBEP/GWSAMPLE_BASIC
+      // Añadimos el recurso ProductSet por defecto si parece una base genérica
+      return `${b}/ProductSet?$top=${t}&$format=json`;
     }
 
     const limit = Math.min(Math.max(Number(req.body?.limit || 1), 1), 50);
     const testUrl = buildSapProductSetUrl(endpoint, limit);
+
+    // Determinar método HTTP: usar el enviado o inferir POST para acciones como Acknowledge
+    let method = String(req.body?.method || '').toUpperCase();
+    if (!method) {
+      if (/\/Acknowledge/i.test(testUrl)) method = 'POST';
+      else method = 'GET';
+    }
 
     let authHeader = '';
     if (username && password) {
@@ -400,7 +491,7 @@ app.post('/erp/sap/test', async (req, res) => {
     const isHttps = u.protocol === 'https:';
 
     const options = {
-      method: 'GET',
+      method: method,
       headers: {
         'Accept': 'application/json',
         ...(authHeader ? { 'Authorization': authHeader } : {}),
@@ -488,11 +579,7 @@ app.get('/mock/sap/ProductSet', (req, res) => {
 });
 
 // Mock de SAP OData: PurchaseOrderSet (para pruebas sin internet)
-const MOCK_SAP_PURCHASE_ORDERS = [
-  { PurchaseOrderID: 'PO-TEST-0001', SupplierName: 'Proveedor Demo', OrderDate: '2024-09-01', ExpectedDate: '2024-09-10', NetAmount: 12500.00 },
-  { PurchaseOrderID: 'PO-TEST-0002', SupplierName: 'Proveedor Demo', OrderDate: '2024-09-03', ExpectedDate: '2024-09-12', NetAmount: 8900.50 },
-  { PurchaseOrderID: 'PO-TEST-0003', SupplierName: 'Proveedor Demo', OrderDate: '2024-09-05', ExpectedDate: '2024-09-15', NetAmount: 1520.00 },
-];
+const MOCK_SAP_PURCHASE_ORDERS = [];
 
 app.get('/mock/sap/PurchaseOrderSet', (req, res) => {
   try {
@@ -512,11 +599,7 @@ app.get('/mock/sap/PurchaseOrderSet', (req, res) => {
 });
 
 // Mock de SAP OData: SalesOrderSet (para pruebas locales)
-const MOCK_SAP_SALES_ORDERS = [
-  { SalesOrderID: 'SO-TEST-0004', CustomerName: 'Cliente Demo', OrderDate: '2024-09-02', RequiredDate: '2024-09-08', NetAmount: 3200.00 },
-  { SalesOrderID: 'SO-TEST-0005', CustomerName: 'Cliente Demo 2', OrderDate: '2024-09-04', RequiredDate: '2024-09-11', NetAmount: 1450.75 },
-  { SalesOrderID: 'SO-TEST-0006', CustomerName: 'Cliente Demo 3', OrderDate: '2024-09-07', RequiredDate: '2024-09-20', NetAmount: 980.00 },
-];
+const MOCK_SAP_SALES_ORDERS = [];
 
 app.get('/mock/sap/SalesOrderSet', (req, res) => {
   try {
@@ -536,11 +619,7 @@ app.get('/mock/sap/SalesOrderSet', (req, res) => {
 });
 
 // Mock de SAP OData: TransferSet (para pruebas locales)
-const MOCK_SAP_TRANSFERS = [
-  { TransferID: 'TR-TEST-0004', TransferDate: '2024-09-03', ExpectedDate: '2024-09-09', Notes: 'Traslado demo 1' },
-  { TransferID: 'TR-TEST-0005', TransferDate: '2024-09-06', ExpectedDate: '2024-09-14', Notes: 'Traslado demo 2' },
-  { TransferID: 'TR-TEST-0006', TransferDate: '2024-09-10', ExpectedDate: '2024-09-18', Notes: 'Traslado demo 3' },
-];
+const MOCK_SAP_TRANSFERS = [];
 
 app.get('/mock/sap/TransferSet', (req, res) => {
   try {
@@ -566,29 +645,168 @@ app.post('/erp/connectors/:id/sync', async (req, res) => {
     const target = String(req.body?.target || req.query?.target || 'products');
     if (!id) return res.status(400).json({ error: 'id requerido' });
 
-    const { data: connector, error: cErr } = await supabase
-      .from('erp_connectors')
-      .select('*')
-      .eq('id', id)
-      .single();
-    if (cErr || !connector) return res.status(404).json({ error: 'Conector no encontrado' });
+    let connector = null;
+    try {
+      const r = await supabase
+        .from('erp_connectors')
+        .select('*')
+        .eq('id', id)
+        .single();
+      connector = r.data || null;
+    } catch {}
+    if (!connector) return res.status(404).json({ error: 'Conector no encontrado' });
     if (!connector?.endpoint) return res.status(400).json({ error: 'Conector sin endpoint' });
 
+    console.log(`[Sync] Connector ${id} direction=${connector.connection_settings?.direction} settingsType=${typeof connector.connection_settings}`);
+
+    // Si es un conector de salida, manejar sincronización push
+    if (connector.connection_settings?.direction === 'outbound') {
+      let processed = 0;
+      let errors = 0;
+      let message = 'Conector de salida verificado.';
+      
+      const https = require('https');
+      const http = require('http');
+
+      // Detectar target adecuado si es 'products' por defecto pero el conector es de purchase_orders
+      let effectiveTarget = target;
+      const supported = connector.connection_settings?.supportedTargets || [];
+      if (target === 'products' && supported.includes('purchase_orders') && !supported.includes('products')) {
+        effectiveTarget = 'purchase_orders';
+      }
+
+      if (effectiveTarget === 'purchase_orders') {
+        try {
+          // Buscar POs recibidas (received)
+          const { data: pos, error: poError } = await supabase
+            .from('purchase_orders')
+            .select('*')
+            .eq('status', 'received')
+            .order('updated_at', { ascending: false })
+            .limit(limit);
+
+          if (poError) throw poError;
+
+          if (pos && pos.length > 0) {
+            const u = new URL(connector.endpoint);
+            const isHttps = u.protocol === 'https:';
+            const client = isHttps ? https : http;
+
+            const username = String(connector.username || '').trim();
+            const password = String(connector.password || '').trim();
+            const apiKey = String(connector.api_key || '').trim();
+            
+            let authHeader = '';
+            if (username && password) {
+              const basic = Buffer.from(`${username}:${password}`).toString('base64');
+              authHeader = `Basic ${basic}`;
+            } else if (apiKey) {
+              authHeader = `Bearer ${apiKey}`;
+            }
+
+            for (const po of pos) {
+              // Payload simple para confirmar recepción
+              const payload = JSON.stringify({
+                po_number: po.po_number,
+                status: po.status,
+                received_date: po.received_date || new Date().toISOString().split('T')[0],
+                notes: po.notes,
+                warehouse_id: po.warehouse_id
+              });
+
+              const options = {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Content-Length': Buffer.byteLength(payload),
+                  ...(authHeader ? { 'Authorization': authHeader } : {})
+                },
+                timeout: 30000
+              };
+
+              try {
+                await new Promise((resolve, reject) => {
+                  const reqOut = client.request(u, options, (resp) => {
+                    let body = '';
+                    resp.on('data', c => body += c);
+                    resp.on('end', () => {
+                      if (resp.statusCode >= 200 && resp.statusCode < 300) resolve(body);
+                      else reject(new Error(`Status ${resp.statusCode}: ${body}`));
+                    });
+                  });
+                  reqOut.on('error', reject);
+                  reqOut.write(payload);
+                  reqOut.end();
+                });
+                processed++;
+              } catch (err) {
+                console.error(`Error sending PO ${po.po_number}:`, err);
+                errors++;
+              }
+            }
+            message = `Se enviaron ${processed} órdenes de compra a SAP.`;
+            if (errors > 0) message += ` (${errors} fallos)`;
+          } else {
+            message = 'No hay órdenes de compra recibidas para enviar.';
+          }
+        } catch (e) {
+          console.error('Error in outbound sync:', e);
+          message = 'Error procesando envío: ' + e.message;
+        }
+      }
+
+      // Actualizar timestamp
+      await supabase
+        .from('erp_connectors')
+        .update({ 
+          status: 'active', 
+          last_sync: new Date().toISOString(), 
+          updated_at: new Date().toISOString(),
+          records_processed: processed 
+        })
+        .eq('id', id);
+        
+      return res.json({ 
+        ok: true, 
+        connector_id: id, 
+        processed, 
+        errors,
+        message 
+      });
+    }
+
+    const allowedTargets = Array.isArray((connector?.connection_settings || {}).supportedTargets)
+      ? (connector.connection_settings.supportedTargets || [])
+      : [];
+    if (allowedTargets.length > 0 && !allowedTargets.includes(target)) {
+      try {
+        await supabase
+          .from('erp_connectors')
+          .update({ status: 'active', last_sync: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .eq('id', id);
+      } catch {}
+      return res.json({ ok: true, connector_id: id, processed: 0, target });
+    }
+
     // Marcar estado como syncing
-    await supabase
-      .from('erp_connectors')
-      .update({ status: 'syncing', updated_at: new Date().toISOString() })
-      .eq('id', id);
+    try {
+      await supabase
+        .from('erp_connectors')
+        .update({ status: 'syncing', updated_at: new Date().toISOString() })
+        .eq('id', id);
+    } catch {}
 
     const syncStartedAt = new Date().toISOString();
     let logRow = null;
     {
-      const { data: log } = await supabase
-        .from('erp_sync_logs')
-        .insert([{ connector_id: id, sync_type: target, status: 'started', started_at: syncStartedAt }])
-        .select()
-        .single();
-      logRow = log || null;
+      try {
+        const { data: log } = await supabase
+          .from('erp_sync_logs')
+          .insert([{ connector_id: id, sync_type: target, status: 'started', started_at: syncStartedAt }])
+          .select()
+          .single();
+        logRow = log || null;
+      } catch {}
     }
 
     const https = require('https');
@@ -603,6 +821,13 @@ app.post('/erp/connectors/:id/sync', async (req, res) => {
       let b = String(base || '').trim();
       b = b.replace(/\/$/, '');
       const t = Number(top) || 50;
+
+      // Si la base ya incluye el recurso o es una acción específica, no duplicar
+      if (b.toLowerCase().includes(resource.toLowerCase()) || /\/Acknowledge/i.test(b)) {
+        const separator = b.includes('?') ? '&' : '?';
+        return `${b}${separator}$top=${t}&$format=json`;
+      }
+
       return `${b}/${resource}?$top=${t}&$format=json`;
     }
 
@@ -616,13 +841,31 @@ app.post('/erp/connectors/:id/sync', async (req, res) => {
     }
 
     let records = [];
+    let processed = 0;
+    let newCount = 0;
     let sourceName = connector.type || 'ERP';
     if ((connector.type || '').toLowerCase().includes('sap')) {
       let resource = 'ProductSet';
-      if (target === 'purchase_orders') resource = 'PurchaseOrderSet';
+      if (target === 'purchase_orders') resource = 'PurchaseOrders';
       else if (target === 'sales_orders') resource = 'SalesOrderSet';
       else if (target === 'transfers') resource = 'TransferSet';
-      const reqUrl = buildSapUrl(endpoint, resource, limit);
+      else if (target === 'inventory') resource = 'ProductSet';
+      let reqUrl = buildSapUrl(endpoint, resource, limit);
+      // Ajuste específico para cuando el endpoint ya incluye el recurso (ej. .../PurchaseOrders)
+      const cleanEndpoint = endpoint.replace(/\/$/, '');
+      if (target === 'purchase_orders' && /\/PurchaseOrders$/i.test(cleanEndpoint)) {
+        reqUrl = `${cleanEndpoint}?$top=${limit}`;
+      } else if (target === 'sales_orders' && /\/SalesOrders$/i.test(cleanEndpoint)) {
+        reqUrl = `${cleanEndpoint}?$top=${limit}`;
+      }
+      /*
+      const isServiceLayer = /\/b1s\/v1/i.test(endpoint);
+      if (isServiceLayer && (target === 'products' || target === 'inventory')) {
+        const base = String(endpoint || '').replace(/\/$/, '');
+        const endsWithItems = /\/Items$/i.test(base);
+        reqUrl = endsWithItems ? `${base}?$top=${limit}` : `${base}/Items?$top=${limit}`;
+      }
+      */
       const u = new URL(reqUrl);
       const isHttps = u.protocol === 'https:';
       const options = {
@@ -657,9 +900,15 @@ app.post('/erp/connectors/:id/sync', async (req, res) => {
 
       let json = null;
       try { json = JSON.parse(raw); } catch {}
-      const rawResults = json?.d?.results || json?.d || json?.value || [];
+      const rawResults = json?.d?.results || json?.d || json?.value || json?.items || json?.results || (Array.isArray(json) ? json : []);
       const arr = Array.isArray(rawResults) ? rawResults : (rawResults ? [rawResults] : []);
       if (target === 'purchase_orders') {
+        let defaultWhId = null;
+        try {
+           const { data: wh } = await supabase.from('warehouses').select('id').eq('is_active', true).limit(1).maybeSingle();
+           if (wh) defaultWhId = wh.id;
+        } catch {}
+
         records = arr.map((o) => {
           const po_number = String(o.PurchaseOrderID || o.DocNum || o.DocEntry || o.OrderNumber || '').trim() || `PO-${Math.random().toString(36).slice(2, 8)}`;
           const order_date_raw = o.OrderDate || o.DocumentDate || o.DocDate || null;
@@ -667,6 +916,13 @@ app.post('/erp/connectors/:id/sync', async (req, res) => {
           const order_date = order_date_raw ? new Date(order_date_raw).toISOString().split('T')[0] : null;
           const expected_date = expected_date_raw ? new Date(expected_date_raw).toISOString().split('T')[0] : null;
           const total_amount = Number(o.NetAmount || o.Total || o.DocTotal || 0) || 0;
+          
+          const items = (o.DocumentLines || []).map(line => ({
+            sku: String(line.ItemCode || '').trim(),
+            quantity: Number(line.Quantity || 0),
+            unit_price: Number(line.Price || 0)
+          })).filter(i => i.sku && i.quantity > 0);
+
           return {
             po_number,
             status: 'confirmed',
@@ -674,6 +930,8 @@ app.post('/erp/connectors/:id/sync', async (req, res) => {
             expected_date,
             total_amount,
             notes: 'Sincronizado desde SAP',
+            items,
+            warehouse_id: defaultWhId
           };
         });
       } else if (target === 'sales_orders') {
@@ -684,6 +942,13 @@ app.post('/erp/connectors/:id/sync', async (req, res) => {
           const order_date = order_date_raw ? new Date(order_date_raw).toISOString().split('T')[0] : null;
           const required_date = required_date_raw ? new Date(required_date_raw).toISOString().split('T')[0] : null;
           const total_amount = Number(o.NetAmount || o.Total || o.DocTotal || 0) || 0;
+          
+          const items = (o.DocumentLines || []).map(line => ({
+            sku: String(line.ItemCode || '').trim(),
+            quantity: Number(line.Quantity || 0),
+            unit_price: Number(line.Price || 0)
+          })).filter(i => i.sku && i.quantity > 0);
+
           return {
             so_number,
             customer_name: String(o.CustomerName || o.CardName || 'Cliente').trim(),
@@ -691,7 +956,9 @@ app.post('/erp/connectors/:id/sync', async (req, res) => {
             order_date,
             required_date,
             total_amount,
+            shipping_address: String(o.ShipToCode || o.Address || o.ShipToDescription || '').trim(),
             notes: 'Sincronizado desde SAP',
+            items // Include items for processing
           };
         });
       } else if (target === 'transfers') {
@@ -730,6 +997,203 @@ app.post('/erp/connectors/:id/sync', async (req, res) => {
         } catch (e) {
           console.warn('No se pudieron consultar warehouses para traspasos:', e?.message || e);
         }
+      } else if (target === 'inventory') {
+        const map = connector.inventory_mapping || {};
+        // Force default mapping if empty or incorrect for SAP B1
+        if (connector.type === 'SAP B1' && (!map.productIdField || map.productIdField === 'ItemCode')) {
+             map.productIdField = 'ItemCode';
+             map.quantityField = 'QuantityOnStock';
+             map.locationField = 'WarehouseCode';
+             map.priceField = 'Price';
+        }
+
+        const productIdField = String(map.productIdField || 'ItemCode');
+        const quantityField = String(map.quantityField || 'OnHand');
+        const locationField = String(map.locationField || 'WhsCode');
+        const priceField = String(map.priceField || 'Price');
+
+        console.log('--- SYNC DEBUG ---');
+        console.log('Mapping used:', { productIdField, quantityField, locationField });
+        if (arr.length > 0) console.log('First Item Sample:', JSON.stringify(arr[0]));
+
+        const rawInv = arr.map((o) => {
+          const sku = String(o[productIdField] || o.ItemCode || o.SKU || '').trim();
+          // Try multiple fields for quantity
+          const qty = Number(o[quantityField] || o.QuantityOnStock || o.Quantity || o.OnHand || 0) || 0;
+          const loc = String(o[locationField] || o.WarehouseCode || o.WhsCode || '').trim();
+          const cost = Number(o[priceField] || 0) || null;
+          
+          return { sku, quantity: qty, location_code: loc, unit_cost: cost };
+        }).filter((r) => r.sku && r.quantity > 0);
+
+        console.log('Parsed Inventory Items:', rawInv.length);
+        if (rawInv.length > 0) console.log('Parsed Sample:', rawInv[0]);
+
+        const skus = Array.from(new Set(rawInv.map(r => r.sku)));
+        const { data: prodRows } = await supabase
+          .from('products')
+          .select('id, sku')
+          .in('sku', skus);
+        const skuToId = new Map((prodRows || []).map(p => [String(p.sku), String(p.id)]));
+
+        const locCodes = Array.from(new Set(rawInv.map(r => r.location_code).filter(Boolean)));
+        let codeToLoc = new Map();
+        if (locCodes.length > 0) {
+          const { data: locRows } = await supabase
+            .from('locations')
+            .select('id, code, warehouse_id')
+            .in('code', locCodes);
+          codeToLoc = new Map((locRows || []).map(l => [String(l.code), l]));
+        }
+        let defaultWh = null;
+        try {
+          const { data: whRows } = await supabase
+            .from('warehouses')
+            .select('id, is_active')
+            .eq('is_active', true)
+            .order('created_at', { ascending: true })
+            .limit(1);
+          defaultWh = (whRows && whRows[0]) ? whRows[0].id : null;
+        } catch {}
+
+        // Asegurar ubicaciones por defecto (GENERAL) para los almacenes involucrados
+        let widToDefault = new Map();
+        try {
+          const involvedWhIds = new Set();
+          if (defaultWh) involvedWhIds.add(defaultWh);
+          if (codeToLoc.size > 0) {
+             for (const l of codeToLoc.values()) {
+               if (l.warehouse_id) involvedWhIds.add(l.warehouse_id);
+             }
+          }
+          
+          if (involvedWhIds.size > 0) {
+            const whIdsArray = Array.from(involvedWhIds);
+            const { data: defLocs } = await supabase
+              .from('locations')
+              .select('id, warehouse_id')
+              .in('warehouse_id', whIdsArray)
+              .eq('code', 'GENERAL');
+            
+            (defLocs || []).forEach(l => widToDefault.set(l.warehouse_id, l.id));
+            
+            // Crear ubicaciones GENERAL faltantes
+            for (const wid of whIdsArray) {
+              if (!widToDefault.has(wid)) {
+                try {
+                  const { data: newLoc } = await supabase
+                    .from('locations')
+                    .insert([{
+                      warehouse_id: wid,
+                      code: 'GENERAL',
+                      name: 'General',
+                      location_type: 'storage',
+                      is_active: true
+                    }])
+                    .select('id')
+                    .single();
+                  if (newLoc) widToDefault.set(wid, newLoc.id);
+                } catch (e) {
+                  console.warn(`No se pudo crear ubicación GENERAL para almacén ${wid}:`, e);
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Error gestionando ubicaciones GENERAL:', e);
+        }
+
+        const movements = [];
+        const moveErrors = [];
+        for (const r of rawInv) {
+          const pid = skuToId.get(r.sku);
+          if (!pid) { moveErrors.push({ sku: r.sku, error: 'producto_no_encontrado' }); continue; }
+          const loc = r.location_code ? codeToLoc.get(r.location_code) : null;
+          const wid = loc?.warehouse_id || defaultWh;
+          let lid = loc?.id || null;
+          
+          // Si no hay ubicación específica (o no se encontró), usar GENERAL
+          if (!lid && wid) {
+            lid = widToDefault.get(wid) || null;
+          }
+
+          if (!wid) { moveErrors.push({ sku: r.sku, error: 'warehouse_no_disponible' }); continue; }
+
+          // --- LOGICA DE RECONCILIACIÓN (SNAPSHOT) ---
+          // En lugar de insertar siempre IN, calculamos la diferencia con el stock actual
+          // para que el resultado final sea igual al ERP.
+          
+          // 1. Consultar stock actual en WMS para este producto + almacén + ubicación
+          let currentQty = 0;
+          let invId = null;
+          try {
+            const query = supabase
+              .from('inventory')
+              .select('id, quantity')
+              .eq('product_id', pid)
+              .eq('warehouse_id', wid);
+            
+            if (lid) {
+              query.eq('location_id', lid);
+            } else {
+              query.is('location_id', null);
+            }
+            
+            const { data: curInv } = await query.maybeSingle();
+            if (curInv) {
+              currentQty = Number(curInv.quantity || 0);
+              invId = curInv.id;
+            }
+          } catch (e) {
+            console.warn('Error consultando stock actual para reconciliación:', e);
+          }
+
+          const targetQty = Number(r.quantity || 0);
+          const diff = targetQty - currentQty;
+
+          if (diff === 0) {
+            // No hay cambio, no creamos movimiento
+            continue;
+          }
+
+          const type = diff > 0 ? 'IN' : 'OUT';
+          const absDiff = Math.abs(diff);
+
+          movements.push({
+            product_id: pid,
+            warehouse_id: wid,
+            location_id: lid || null,
+            movement_type: type,
+            transaction_type: 'RECEIPT', // Mantenemos RECEIPT para que aparezca en reportes de entrada (si es IN)
+            quantity: absDiff,
+            unit_cost: r.unit_cost !== null ? Number(r.unit_cost) : null,
+            notes: 'Sincronizado desde ERP (Reconciliación)',
+          });
+        }
+
+        if (movements.length > 0) {
+          const { error: insErr } = await supabase
+            .from('inventory_movements')
+            .insert(movements);
+          if (insErr) throw insErr;
+        }
+        processed = movements.length;
+        newCount = movements.length;
+
+        if (logRow?.id && moveErrors.length > 0) {
+          try {
+            await supabase
+              .from('erp_sync_logs')
+              .update({ error_message: JSON.stringify({ errors: moveErrors }) })
+              .eq('id', logRow.id);
+          } catch {}
+        }
+
+        await supabase.from('erp_connectors').update({ status: 'active', last_sync: new Date().toISOString() }).eq('id', id);
+        if (logRow?.id) {
+          await supabase.from('erp_sync_logs').update({ status: 'completed', completed_at: new Date().toISOString(), records_processed: processed }).eq('id', logRow.id);
+        }
+        return res.json({ ok: true, connector_id: id, processed, source: sourceName, target, newCount });
       } else {
         records = arr.map(p => {
           const sku = String(p.ProductID || p.ID || p.ItemCode || p.SKU || '').trim();
@@ -749,23 +1213,97 @@ app.post('/erp/connectors/:id/sync', async (req, res) => {
         });
       }
     } else {
-      return res.status(400).json({ error: `Tipo de conector no soportado para sync: ${connector.type || ''}` });
+      const base = endpoint.replace(/\/$/, '');
+      let reqUrl = base;
+      if (target === 'products') {
+        if (/\/products$/i.test(base)) {
+          reqUrl = base;
+        } else {
+          reqUrl = `${base}/products?limit=${limit}`;
+        }
+        const u = new URL(reqUrl);
+        const isHttps = u.protocol === 'https:';
+        const options = {
+          method: 'GET',
+          headers: { 'Accept': 'application/json', ...(buildAuthHeader(username, password, apiKey) ? { Authorization: buildAuthHeader(username, password, apiKey) } : {}) },
+          timeout: timeoutMs,
+        };
+        const client = isHttps ? https : http;
+        const raw = await new Promise((resolve, reject) => {
+          const reqOut = client.request(u, options, (resp) => {
+            const status = resp.statusCode || 0;
+            let body = '';
+            resp.on('data', (chunk) => { body += chunk; });
+            resp.on('end', () => {
+              if (status >= 200 && status < 300) {
+                resolve(body);
+              } else if (status === 401 || status === 403) {
+                reject(new Error('Credenciales inválidas o acceso denegado'));
+              } else {
+                reject(new Error(`Error ${status} conectando a API personalizada`));
+              }
+            });
+          });
+          reqOut.on('timeout', () => {
+            try { reqOut.destroy(); } catch {}
+            reject(new Error('Timeout conectando a API personalizada'));
+          });
+          reqOut.on('error', (err) => reject(err));
+          reqOut.end();
+        });
+        let json = null;
+        try { json = JSON.parse(raw); } catch {}
+        const rawResults = Array.isArray(json) ? json : (json?.data || json?.items || json?.results || json?.value || []);
+        const arr = Array.isArray(rawResults) ? rawResults : (rawResults ? [rawResults] : []);
+        records = arr.map(p => {
+          const sku = String(p.ProductID || p.ID || p.ItemCode || p.SKU || p.sku || '').trim();
+          const name = String(p.Name || p.ItemName || p.ProductName || p.Name1 || p.name || '').trim() || 'Producto';
+          const description = String(p.Description || p.ShortDescription || p.description || '').trim() || null;
+          const selling_price = Number(p.Price || p.SalesPrice || p.UnitPrice || p.selling_price || 0) || 0;
+          const cost_price = Number(p.Cost || p.UnitCost || p.ItemCost || p.StandardCost || p.PurchasePrice || p.AvgPrice || p.cost_price || p.Price || 0) || 0;
+          const _stock_quantity = Number(p.QuantityOnStock || p.Stock || p.Quantity || p.OnHand || 0);
+          const _warehouse_code = String(p.WarehouseCode || p.WhsCode || 'ALM01').trim();
+          return {
+            sku: sku || name || `SKU_${Math.random().toString(36).slice(2, 8)}`,
+            name,
+            description,
+            selling_price,
+            cost_price,
+            unit_of_measure: 'PCS',
+            is_active: true,
+            _stock_quantity,
+            _warehouse_code
+          };
+        });
+      } else {
+        await supabase
+          .from('erp_connectors')
+          .update({ status: 'active', last_sync: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .eq('id', id);
+        if (logRow?.id) {
+          await supabase
+            .from('erp_sync_logs')
+            .update({ status: 'completed', completed_at: new Date().toISOString(), records_processed: 0, error_message: null })
+            .eq('id', logRow.id);
+        }
+        return res.json({ ok: true, connector_id: id, processed: 0, source: sourceName, target, newCount: 0 });
+      }
     }
 
     if (!records.length) {
       await supabase.from('erp_connectors').update({ status: 'active', last_sync: new Date().toISOString() }).eq('id', id);
       if (logRow?.id) {
-        await supabase.from('erp_sync_logs').update({ status: 'completed', ended_at: new Date().toISOString(), total_records: 0 }).eq('id', logRow.id);
+        await supabase.from('erp_sync_logs').update({ status: 'completed', completed_at: new Date().toISOString(), records_processed: 0 }).eq('id', logRow.id);
       }
       return res.json({ ok: true, connector_id: id, processed: 0, source: sourceName, target });
     }
 
-    let processed = 0;
-    let newCount = 0;
     let newPoNumbers = [];
     if (target === 'purchase_orders') {
       // Calcular órdenes nuevas comparando po_number existentes
       const poNumbers = records.map(r => r.po_number).filter(Boolean);
+      let recordsToInsert = records;
+
       if (poNumbers.length > 0) {
         try {
           const { data: existingRows } = await supabase
@@ -775,16 +1313,77 @@ app.post('/erp/connectors/:id/sync', async (req, res) => {
           const existingSet = new Set((existingRows || []).map(r => r.po_number));
           newPoNumbers = poNumbers.filter(po => !existingSet.has(po));
           newCount = newPoNumbers.length;
+          
+          // Filtrar para solo insertar órdenes nuevas (evitar duplicados/sobrescritura)
+          recordsToInsert = records.filter(r => !existingSet.has(r.po_number));
         } catch (e) {
           console.warn('No se pudo consultar órdenes existentes:', e?.message || e);
         }
       }
-      const { data: upserted, error: upErr } = await supabase
-        .from('purchase_orders')
-        .upsert(records, { onConflict: 'po_number' })
-        .select('po_number');
-      if (upErr) throw upErr;
-      processed = (upserted || records).length;
+
+      if (recordsToInsert.length > 0) {
+        // Remover 'items' antes de hacer upsert
+        const recordsForUpsert = recordsToInsert.map(({ items, ...rest }) => rest);
+
+        const { data: upserted, error: upErr } = await supabase
+          .from('purchase_orders')
+          .upsert(recordsForUpsert, { onConflict: 'po_number' })
+          .select('id, po_number');
+        if (upErr) throw upErr;
+        processed = (upserted || recordsForUpsert).length;
+
+        // Insertar ítems para las nuevas órdenes
+        try {
+          const poMap = new Map((upserted || []).map(o => [o.po_number, o.id]));
+          
+          // Recolectar SKUs
+          const allSkus = new Set();
+          recordsToInsert.forEach(r => {
+            if (r.items && poMap.has(r.po_number)) {
+              r.items.forEach(i => allSkus.add(i.sku));
+            }
+          });
+
+          // Buscar IDs de productos
+          let skuMap = new Map();
+          if (allSkus.size > 0) {
+            const { data: prods } = await supabase
+              .from('products')
+              .select('id, sku')
+              .in('sku', Array.from(allSkus));
+            skuMap = new Map((prods || []).map(p => [p.sku, p.id]));
+          }
+
+          const itemsBatch = [];
+          for (const r of recordsToInsert) {
+            const poId = poMap.get(r.po_number);
+            if (poId && r.items && Array.isArray(r.items)) {
+              for (const item of r.items) {
+                const pid = skuMap.get(item.sku);
+                if (pid) {
+                  itemsBatch.push({
+                    purchase_order_id: poId,
+                    product_id: pid,
+                    quantity: item.quantity,
+                    unit_price: item.unit_price
+                  });
+                }
+              }
+            }
+          }
+
+          if (itemsBatch.length) {
+            const { error: insErr } = await supabase
+              .from('purchase_order_items')
+              .insert(itemsBatch);
+            if (insErr) throw insErr;
+          }
+        } catch (e) {
+           console.warn('No se pudieron agregar ítems a nuevas órdenes de compra:', e?.message || e);
+        }
+      } else {
+        processed = 0;
+      }
     } else if (target === 'sales_orders') {
       let newSoNumbers = [];
       try {
@@ -801,58 +1400,66 @@ app.post('/erp/connectors/:id/sync', async (req, res) => {
       } catch (e) {
         console.warn('No se pudo consultar órdenes de venta existentes:', e?.message || e);
       }
+      
+      // Remover 'items' antes de hacer upsert en sales_orders para evitar error de columna inexistente
+      const recordsForUpsert = records.map(({ items, ...rest }) => rest);
+
       const { data: upserted, error: upErr } = await supabase
         .from('sales_orders')
-        .upsert(records, { onConflict: 'so_number' })
+        .upsert(recordsForUpsert, { onConflict: 'so_number' })
         .select('so_number');
       if (upErr) throw upErr;
       processed = (upserted || records).length;
 
-      // Crear ítems de venta desde inventario con ubicación solo para nuevas órdenes
+      // Crear ítems de venta basados en los datos recibidos del ERP
       if (newSoNumbers.length > 0) {
         try {
           const { data: newOrders, error: newOrdersErr } = await supabase
             .from('sales_orders')
-            .select('id, warehouse_id')
+            .select('id, so_number')
             .in('so_number', newSoNumbers);
           if (newOrdersErr) throw newOrdersErr;
 
-          // Inventario disponible con ubicación
-          const { data: invRows, error: invErr } = await supabase
-            .from('inventory')
-            .select('product_id, warehouse_id, location_id, available_quantity, lot_number')
-            .gt('available_quantity', 0)
-            .not('location_id', 'is', null)
-            .limit(100);
-          if (invErr) throw invErr;
+          const soMap = new Map((newOrders || []).map(o => [o.so_number, o.id]));
+          
+          // Recolectar SKUs de los registros procesados
+          const allSkus = new Set();
+          records.forEach(r => {
+            if (r.items && soMap.has(r.so_number)) {
+              r.items.forEach(i => allSkus.add(i.sku));
+            }
+          });
 
-          const productIds = [...new Set((invRows || []).map(r => r.product_id).filter(Boolean))];
-          const { data: prodRows, error: prodErr } = await supabase
-            .from('products')
-            .select('id, selling_price')
-            .in('id', productIds);
-          if (prodErr) throw prodErr;
-          const priceMap = new Map((prodRows || []).map(p => [p.id, Number(p.selling_price || 1)]));
+          // Buscar IDs de productos
+          let skuMap = new Map();
+          if (allSkus.size > 0) {
+            const { data: prods } = await supabase
+              .from('products')
+              .select('id, sku')
+              .in('sku', Array.from(allSkus));
+            skuMap = new Map((prods || []).map(p => [p.sku, p.id]));
+          }
 
           const itemsBatch = [];
-          for (const order of (newOrders || [])) {
-            // Seleccionar hasta 3 productos con stock y ubicación, idealmente del almacén del pedido si existe
-            const picks = (invRows || [])
-              .filter(r => !order.warehouse_id || r.warehouse_id === order.warehouse_id)
-              .slice(0, Math.min(3, (invRows || []).length));
-            for (const r of picks) {
-              const qtyAvail = Number(r.available_quantity || 0);
-              const qty = Math.max(1, Math.min(3, qtyAvail || 1));
-              const unitPrice = priceMap.get(r.product_id) || 1;
-              itemsBatch.push({
-                sales_order_id: order.id,
-                product_id: r.product_id,
-                quantity: qty,
-                unit_price: unitPrice,
-                notes: 'Sincronizado desde ERP (stock)'
-              });
+          for (const r of records) {
+            const soId = soMap.get(r.so_number);
+            if (soId && r.items && Array.isArray(r.items)) {
+              for (const item of r.items) {
+                const pid = skuMap.get(item.sku);
+                // Solo insertar si el producto existe en WMS
+                if (pid) {
+                  itemsBatch.push({
+                    sales_order_id: soId,
+                    product_id: pid,
+                    quantity: item.quantity,
+                    unit_price: item.unit_price,
+                    notes: 'Sincronizado desde SAP'
+                  });
+                }
+              }
             }
           }
+
           if (itemsBatch.length) {
             const { error: insErr } = await supabase
               .from('sales_order_items')
@@ -860,7 +1467,7 @@ app.post('/erp/connectors/:id/sync', async (req, res) => {
             if (insErr) throw insErr;
           }
         } catch (e) {
-          console.warn('No se pudieron agregar ítems a nuevas órdenes de venta desde inventario:', e?.message || e);
+          console.warn('No se pudieron agregar ítems a nuevas órdenes de venta:', e?.message || e);
         }
       }
     } else if (target === 'transfers') {
@@ -942,47 +1549,126 @@ app.post('/erp/connectors/:id/sync', async (req, res) => {
         }
       }
     } else {
-      // Calcular productos nuevos comparando sku existentes
-      try {
-        const skus = records.map(r => r.sku).filter(Boolean);
-        if (skus.length > 0) {
-          const { data: existingProducts } = await supabase
+      const dir = String((connector?.connection_settings || {}).direction || '').toLowerCase();
+      if (dir === 'salida') {
+        processed = 0;
+        newCount = 0;
+      } else {
+        const allowProducts = ((connector?.connection_settings || {}).allowProducts === true) || (Array.isArray(allowedTargets) && allowedTargets.includes('products'));
+        if (target === 'products' && !allowProducts) {
+          processed = 0;
+          newCount = 0;
+        } else {
+          try {
+            const skus = records.map(r => r.sku).filter(Boolean);
+            if (skus.length > 0) {
+              const { data: existingProducts } = await supabase
+                .from('products')
+                .select('sku')
+                .in('sku', skus);
+              const existingSet = new Set((existingProducts || []).map(p => p.sku));
+              const newSkus = skus.filter(sku => !existingSet.has(sku));
+              newCount = newSkus.length;
+            }
+          } catch (e) {
+            console.warn('No se pudo consultar productos existentes:', e?.message || e);
+          }
+          const recordsForUpsert = records.map(({ _stock_quantity, _warehouse_code, ...rest }) => rest);
+          const { data: upserted, error: upErr } = await supabase
             .from('products')
-            .select('sku')
-            .in('sku', skus);
-          const existingSet = new Set((existingProducts || []).map(p => p.sku));
-          const newSkus = skus.filter(sku => !existingSet.has(sku));
-          newCount = newSkus.length;
+            .upsert(recordsForUpsert, { onConflict: 'sku' })
+            .select('id, sku');
+          if (upErr) throw upErr;
+          processed = (upserted || records).length;
+
+          // Sincronizar stock inicial si está disponible
+          try {
+            const productsMap = new Map((upserted || []).map(p => [p.sku, p.id]));
+            const warehouseCache = new Map();
+            
+            // Pre-fetch warehouse ALM01 if used
+            try {
+               const { data: whList } = await supabase.from('warehouses').select('id, code').limit(50);
+               if (whList) whList.forEach(w => warehouseCache.set(w.code, w.id));
+            } catch {}
+
+            for (const rec of records) {
+               if (rec._stock_quantity > 0) {
+                 const pid = productsMap.get(rec.sku);
+                 if (!pid) continue;
+                 
+                 let wid = warehouseCache.get(rec._warehouse_code);
+                 if (!wid && rec._warehouse_code) {
+                    // Try to fetch specific warehouse if not in cache
+                    const { data: wh } = await supabase.from('warehouses').select('id').eq('code', rec._warehouse_code).maybeSingle();
+                    if (wh) {
+                       wid = wh.id;
+                       warehouseCache.set(rec._warehouse_code, wid);
+                    }
+                 }
+                 
+                 if (wid) {
+                   const { data: existingInv } = await supabase
+                     .from('inventory')
+                     .select('id')
+                     .eq('product_id', pid)
+                     .eq('warehouse_id', wid)
+                     .is('location_id', null)
+                     .is('lot_number', null)
+                     .maybeSingle();
+                     
+                   if (existingInv) {
+                     await supabase.from('inventory').update({ quantity: rec._stock_quantity }).eq('id', existingInv.id);
+                   } else {
+                     await supabase.from('inventory').insert({
+                       product_id: pid,
+                       warehouse_id: wid,
+                       quantity: rec._stock_quantity,
+                       location_id: null,
+                       lot_number: null
+                     });
+                   }
+                 }
+               }
+            }
+          } catch (e) {
+            console.warn('Error sincronizando stock inicial en productos:', e?.message || e);
+          }
         }
-      } catch (e) {
-        console.warn('No se pudo consultar productos existentes:', e?.message || e);
       }
-      const { data: upserted, error: upErr } = await supabase
-        .from('products')
-        .upsert(records, { onConflict: 'sku' })
-        .select('sku');
-      if (upErr) throw upErr;
-      processed = (upserted || records).length;
     }
 
-    await supabase
-      .from('erp_connectors')
-      .update({
+    try {
+      await supabase
+        .from('erp_connectors')
+        .update({
+          status: 'active',
+          last_sync: new Date().toISOString(),
+          records_processed: Number(connector.records_processed || 0) + processed,
+          error_count: Number(connector.error_count || 0),
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', id);
+    } catch {}
+    if (memoryConnectors.has(id)) {
+      const cur = memoryConnectors.get(id);
+      memoryConnectors.set(id, {
+        ...cur,
         status: 'active',
         last_sync: new Date().toISOString(),
-        records_processed: Number(connector.records_processed || 0) + processed,
-        error_count: Number(connector.error_count || 0),
+        records_processed: Number(cur?.records_processed || 0) + processed,
+        error_count: Number(cur?.error_count || 0),
         updated_at: new Date().toISOString(),
-      })
-      .eq('id', id);
+      });
+    }
 
     if (logRow?.id) {
       await supabase
         .from('erp_sync_logs')
         .update({
           status: 'completed',
-          ended_at: new Date().toISOString(),
-          total_records: processed,
+          completed_at: new Date().toISOString(),
+          records_processed: processed,
           error_message: null,
         })
         .eq('id', logRow.id);
@@ -1128,6 +1814,11 @@ app.post('/erp/connectors/:id/sync', async (req, res) => {
           .eq('id', id);
       }
     } catch {}
+    if (memoryConnectors.has(String(req.params.id || '').trim())) {
+      const memId = String(req.params.id || '').trim();
+      const cur = memoryConnectors.get(memId);
+      memoryConnectors.set(memId, { ...cur, status: 'error', error_count: Number(cur?.error_count || 0) + 1, updated_at: new Date().toISOString() });
+    }
     try {
       const id = String(req.params.id || '').trim();
       const { data: logs } = await supabase
@@ -1142,13 +1833,181 @@ app.post('/erp/connectors/:id/sync', async (req, res) => {
           .from('erp_sync_logs')
           .update({
             status: 'failed',
-            ended_at: new Date().toISOString(),
+            completed_at: new Date().toISOString(),
             error_message: e?.message || String(e),
           })
           .eq('id', lastLog.id);
       }
     } catch {}
     return res.status(500).json({ error: e?.message || 'Error interno sincronizando conector' });
+  }
+});
+
+// Crear conector ERP
+app.post('/erp/connectors', authMiddleware, requirePermissionId('config_write'), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const nowIso = new Date().toISOString();
+    const row = {
+      name: String(b.name || '').trim() || 'Conector ERP',
+      type: String(b.type || '').trim() || 'SAP B1',
+      endpoint: String(b.endpoint || '').trim(),
+      username: b.username ? String(b.username) : null,
+      api_key: b.api_key ? String(b.api_key) : null,
+      version: String(b.version || '1.0'),
+      sync_interval: Number(b.sync_interval || 60),
+      sync_type: String(b.sync_type || 'manual'),
+      status: String(b.status || 'inactive'),
+      last_sync: b.last_sync || null,
+      next_sync: b.next_sync || null,
+      records_processed: Number(b.records_processed || 0),
+      error_count: Number(b.error_count || 0),
+      auto_sync: false,
+      connection_settings: b.connection_settings || {},
+      inventory_mapping: b.inventory_mapping || {},
+      is_active: !!b.is_active,
+      created_at: nowIso,
+      updated_at: nowIso,
+      created_by: null,
+    };
+    if (!row.endpoint) return res.status(400).json({ error: 'endpoint requerido' });
+  const r = await supabase
+      .from('erp_connectors')
+      .insert([row])
+      .select('*')
+      .maybeSingle();
+    if (r.error || !r.data) {
+      const msg = r.error?.message || 'Error insertando conector';
+      return res.status(400).json({ error: msg });
+    }
+    return res.json({ connector: r.data });
+  } catch (e) {
+    console.error('Error creando conector ERP:', e);
+    return res.status(500).json({ error: 'Error interno creando conector' });
+  }
+});
+
+// Listar conectores ERP
+app.get('/erp/connectors', authMiddleware, requirePermissionId('config_read'), async (_req, res) => {
+  try {
+    const r = await supabase
+      .from('erp_connectors')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (r.error) {
+      return res.status(500).json({ error: r.error.message || 'Error listando conectores' });
+    }
+    const dbRows = Array.isArray(r.data) ? r.data : [];
+    return res.json({ connectors: dbRows });
+  } catch (e) {
+    console.error('Error listando conectores ERP:', e);
+    return res.status(500).json({ error: 'Error interno listando conectores' });
+  }
+});
+
+// Listar errores/logs de sincronización de un conector ERP
+app.get('/erp/connectors/:id/errors', authMiddleware, requirePermissionId('config_read'), async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    const limit = Math.max(1, Math.min(200, parseInt(req.query.limit, 10) || 50));
+    if (!id) return res.status(400).json({ error: 'id requerido' });
+
+    const { data, error } = await supabase
+      .from('erp_sync_logs')
+      .select('*')
+      .eq('connector_id', id)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) return res.status(500).json({ error: error.message || 'Error leyendo logs' });
+
+    const rows = (data || []).map((r) => {
+      const start = r.started_at || r.created_at || null;
+      const end = r.ended_at || r.completed_at || null;
+      const duration = r.duration_seconds || (start && end ? Math.round((new Date(end).getTime() - new Date(start).getTime()) / 1000) : null);
+      const processed = r.records_processed ?? r.total_records ?? null;
+      const failed = r.records_failed ?? null;
+      return {
+        id: r.id,
+        sync_type: r.sync_type,
+        status: r.status,
+        started_at: start,
+        ended_at: end,
+        duration_seconds: duration,
+        records_processed: processed,
+        records_failed: failed,
+        error_message: r.error_message || null,
+      };
+    });
+
+    const errors = rows.filter((r) => {
+      const st = String(r.status || '').toLowerCase();
+      const isErr = st === 'failed' || st === 'error';
+      return isErr || !!r.error_message;
+    });
+    return res.json({ logs: rows, errors });
+  } catch (e) {
+    console.error('Error listando errores de conector ERP:', e);
+    return res.status(500).json({ error: 'Error interno listando errores' });
+  }
+});
+
+app.put('/erp/connectors/:id', authMiddleware, requirePermissionId('config_write'), async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).json({ error: 'id requerido' });
+    const b = req.body || {};
+  const updates = {
+      name: b.name,
+      type: b.type,
+      endpoint: b.endpoint,
+      username: b.username ?? null,
+      api_key: b.api_key ?? null,
+      version: b.version,
+      sync_interval: b.sync_interval,
+      sync_type: b.sync_type,
+      status: b.status,
+      last_sync: b.last_sync ?? null,
+      next_sync: b.next_sync ?? null,
+      records_processed: b.records_processed,
+      error_count: b.error_count,
+      connection_settings: b.connection_settings,
+      inventory_mapping: b.inventory_mapping,
+      is_active: !!b.is_active,
+      updated_at: new Date().toISOString(),
+    };
+    const r = await supabase
+      .from('erp_connectors')
+      .update(updates)
+      .eq('id', id)
+      .select('*')
+      .maybeSingle();
+    if (r.error) {
+      return res.status(500).json({ error: 'Error de base de datos actualizando conector' });
+    }
+    if (!r.data) {
+      return res.status(404).json({ error: 'Conector no encontrado' });
+    }
+    return res.json({ connector: r.data });
+  } catch (e) {
+    console.error('Error actualizando conector ERP:', e);
+    return res.status(500).json({ error: 'Error interno actualizando conector' });
+  }
+});
+
+// Eliminar conector ERP
+app.delete('/erp/connectors/:id', authMiddleware, requirePermissionId('config_write'), async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).json({ error: 'id requerido' });
+    const { error } = await supabase
+      .from('erp_connectors')
+      .delete()
+      .eq('id', id);
+    if (error) return res.status(500).json({ error: error.message || 'Error eliminando conector' });
+    return res.json({ ok: true, id });
+  } catch (e) {
+    console.error('Error eliminando conector ERP:', e);
+    return res.status(500).json({ error: 'Error interno eliminando conector' });
   }
 });
 
@@ -1354,8 +2213,15 @@ app.get('/activity/recent', async (_req, res) => {
 
     return res.json({ items });
   } catch (e) {
-    console.error('Error obteniendo actividad reciente:', e);
-    return res.status(500).json({ error: 'Error interno obteniendo actividad' });
+    const now = new Date();
+    const sample = [
+      { id: `in-${now.getTime()}`, type: 'inbound', title: 'Recepción simulada', description: 'purchase_order - 12 unidades', location: 'RCV-01', timestamp: '1 min', priority: 'medium' },
+      { id: `pk-${now.getTime()-1}`, type: 'picking', title: 'Picking asignado', description: 'picking_batch - 5 unidades', location: 'A-01-BIN-03', timestamp: '3 min', priority: 'low' },
+      { id: `al-${now.getTime()-2}`, type: 'alert', title: 'Stock bajo', description: 'SKU-TEST - Solo 0 unidades disponibles', location: '', timestamp: 'justo ahora', priority: 'critical' },
+      { id: `out-${now.getTime()-3}`, type: 'outbound', title: 'Envío preparado', description: 'sales_order - 7 unidades', location: 'SHP-02', timestamp: '5 min', priority: 'medium' },
+      { id: `cc-${now.getTime()-4}`, type: 'completed', title: 'Conteo cíclico registrado', description: 'cycle_count - 20 posiciones', location: 'A-02', timestamp: '10 min', priority: 'low' }
+    ];
+    return res.json({ items: sample });
   }
 });
 
@@ -1725,8 +2591,14 @@ app.get('/tasks/pending', async (_req, res) => {
 
     return res.json({ tasks: uniqueTasks });
   } catch (e) {
-    console.error('Error obteniendo tareas pendientes:', e);
-    return res.status(500).json({ error: 'Error interno obteniendo tareas' });
+    const today = new Date();
+    const todayStr = today.toISOString().slice(0, 10);
+    const sample = [
+      { id: `so-dev-${today.getTime()}`, type: 'picking', title: 'Picking', description: 'Orden DEV-001 - Cliente Demo', priority: 'high', assignedTo: '', dueDate: todayStr, estimatedTime: '—', location: 'Zona A', status: 'pending' },
+      { id: `po-dev-${today.getTime()-1}`, type: 'receiving', title: 'Recepción', description: 'PO DEV-PO - Programada', priority: 'medium', assignedTo: '', dueDate: todayStr, estimatedTime: '—', location: 'Muelle A', status: 'pending' },
+      { id: `rep-dev-${today.getTime()-2}`, type: 'replenishment', title: 'Reposición', description: 'SKU-TEST bajo stock (0)', priority: 'medium', assignedTo: '', dueDate: todayStr, estimatedTime: '—', location: 'A-01-BIN-03', status: 'pending' }
+    ];
+    return res.json({ tasks: sample });
   }
 });
 
@@ -2956,6 +3828,63 @@ app.get('/picking/batches/stream', async (req, res) => {
   }
 });
 
+// Endpoint exclusivo para tareas de acomodo
+app.get('/putaway/tasks', authMiddleware, async (req, res) => {
+  try {
+    const { status: statusParam } = req.query || {};
+
+    let query = supabase
+      .from('picking_tasks')
+      .select('*')
+      .ilike('customer', '%acomodo%')
+      .order('createdat', { ascending: false });
+
+    if (statusParam && String(statusParam).toLowerCase() !== 'all') {
+      if (String(statusParam) === 'completed') {
+        query = query.eq('status', 'completed');
+      } else if (String(statusParam) === 'pending') {
+        query = query.in('status', ['pending', 'in_progress']);
+      } else {
+        query = query.eq('status', String(statusParam));
+      }
+    }
+
+    const { data: tasks, error } = await query;
+    if (error) {
+       // Si no existe la tabla, retornamos arreglo vacío
+       if (error.code === 'PGRST205' || String(error.message).includes('does not exist')) {
+         return res.json({ tasks: [] });
+       }
+       throw error;
+    }
+
+    const result = (tasks || []).map(t => ({
+      id: t.id,
+      orderNumber: t.ordernumber || t.orderNumber,
+      customer: t.customer,
+      priority: t.priority || 'medium',
+      status: t.status || 'pending',
+      assignedTo: t.assignedto || t.assignedTo || '',
+      zone: t.zone || 'Zona de Recepción',
+      location: t.location || '—',
+      items: Array.isArray(t.items) ? t.items : [],
+      estimatedTime: t.estimatedtime || t.estimatedTime || 10,
+      actualTime: t.actualtime || t.actualTime || undefined,
+      createdAt: t.createdat || t.createdAt || new Date().toISOString(),
+      dueDate: t.duedate || t.dueDate || new Date().toISOString(),
+      notes: t.notes || '',
+      originZone: t.originzone || t.originZone || undefined,
+      destinationZone: t.destinationzone || t.destinationZone || undefined,
+      creator: t.creator || undefined,
+    }));
+
+    return res.json({ tasks: result });
+  } catch (e) {
+    console.error('Error en /putaway/tasks', e);
+    return res.status(500).json({ error: 'Error interno obteniendo tareas de acomodo' });
+  }
+});
+
 app.get('/picking/tasks', async (req, res) => {
   try {
     const { status: statusParam } = req.query || {};
@@ -3050,21 +3979,21 @@ app.get('/picking/tasks', async (req, res) => {
       if (!pterr && Array.isArray(ptasks)) {
         dbTasks = ptasks.map(t => ({
           id: t.id,
-          orderNumber: t.orderNumber,
+          orderNumber: t.orderNumber || t.ordernumber,
           customer: t.customer,
           priority: t.priority || 'medium',
           status: t.status || 'pending',
-          assignedTo: t.assignedTo || '',
+          assignedTo: t.assignedTo || t.assignedto || '',
           zone: t.zone || 'Zona A - Picking',
           location: t.location || '—',
           items: Array.isArray(t.items) ? t.items : [],
-          estimatedTime: t.estimatedTime || 10,
-          actualTime: t.actualTime || undefined,
-          createdAt: t.createdAt || new Date().toISOString(),
-          dueDate: t.dueDate || new Date().toISOString(),
+          estimatedTime: t.estimatedTime || t.estimatedtime || 10,
+          actualTime: t.actualTime || t.actualtime || undefined,
+          createdAt: t.createdAt || t.createdat || new Date().toISOString(),
+          dueDate: t.dueDate || t.duedate || new Date().toISOString(),
           notes: t.notes || '',
-          originZone: t.originZone || undefined,
-          destinationZone: t.destinationZone || undefined,
+          originZone: t.originZone || t.originzone || undefined,
+          destinationZone: t.destinationZone || t.destinationzone || undefined,
           creator: t.creator || undefined,
         }));
       }
@@ -3081,9 +4010,10 @@ app.get('/picking/tasks', async (req, res) => {
 app.post('/picking/tasks', authMiddleware, async (req, res) => {
   try {
     const payload = req.body || {};
+    const isPutaway = /acomodo/i.test(String((payload.customer || '')).toLowerCase());
+
     // Si es una tarea de acomodo, requerir permiso específico de gestión
     try {
-      const isPutaway = /acomodo/i.test(String((payload.customer || '')).toLowerCase());
       if (isPutaway) {
         const userId = (req.user || {}).sub;
         const { role, permissions } = await getUserPermissionsFromDb(userId);
@@ -3124,12 +4054,16 @@ app.post('/picking/tasks', authMiddleware, async (req, res) => {
       const { data: existingActive, error: existErr } = await supabase
         .from('picking_tasks')
         .select('id,status')
-        .eq('orderNumber', task.orderNumber)
+        .eq('ordernumber', task.orderNumber)
         .in('status', ['pending', 'in_progress']);
       if (existErr) {
-        return res.status(500).json({ error: `Error verificando tareas existentes: ${existErr.message}` });
-      }
-      if ((existingActive || []).length > 0) {
+        // Ignorar error si la tabla no existe (PGRST205) para permitir funcionamiento sin tabla
+        if (String(existErr.code) === 'PGRST205' || String(existErr.message).includes('Could not find the table')) {
+          console.warn('Advertencia: tabla picking_tasks no existe, omitiendo validación de duplicados.');
+        } else {
+          return res.status(500).json({ error: `Error verificando tareas existentes: ${existErr.message}` });
+        }
+      } else if ((existingActive || []).length > 0) {
         return res.status(409).json({
           error: 'La orden ya está asignada a una tarea activa',
           orderNumber: task.orderNumber,
@@ -3142,80 +4076,86 @@ app.post('/picking/tasks', authMiddleware, async (req, res) => {
     }
 
     // 2) Ajustar cantidades de items según reservas en tareas activas y disponibilidad
-    try {
-      const { data: activeTasks, error: activeErr } = await supabase
-        .from('picking_tasks')
-        .select('items,status')
-        .in('status', ['pending', 'in_progress']);
-      if (activeErr) {
-        return res.status(500).json({ error: `Error consultando tareas activas: ${activeErr.message}` });
-      }
-      const reservedByProduct = new Map(); // product_id -> qty
-      for (const t of (activeTasks || [])) {
-        const arr = Array.isArray(t.items) ? t.items : [];
-        for (const it of arr) {
-          const pid = it?.product_id ?? it?.productId ?? it?.product ?? null;
-          const qty = Number(it?.quantity ?? it?.qty ?? 0) || 0;
-          if (pid && qty > 0) {
-            reservedByProduct.set(pid, (reservedByProduct.get(pid) || 0) + qty);
-          }
-        }
-      }
-      // Disponibilidad total por producto (suma de available_quantity)
-      const productsInTask = [...new Set((task.items || [])
-        .map(it => it?.product_id ?? it?.productId ?? it?.product ?? null)
-        .filter(Boolean))];
-      let availableByProduct = new Map();
-      if (productsInTask.length > 0) {
-        const { data: invRows, error: invErr } = await supabase
-          .from('inventory')
-          .select('product_id, available_quantity')
-          .in('product_id', productsInTask);
-        if (invErr) {
-          return res.status(500).json({ error: `Error consultando inventario: ${invErr.message}` });
-        }
-        availableByProduct = new Map();
-        for (const r of (invRows || [])) {
-          const pid = r.product_id;
-          const aq = Number(r.available_quantity || 0) || 0;
-          availableByProduct.set(pid, (availableByProduct.get(pid) || 0) + aq);
-        }
-      }
+    // SOLO PARA PICKING (no Putaway/Acomodo)
+    if (!isPutaway) {
+      try {
+        const { data: activeTasks, error: activeErr } = await supabase
+          .from('picking_tasks')
+          .select('items,status')
+          .in('status', ['pending', 'in_progress'])
+          // Excluir tareas de acomodo de la suma de reservas (opcional, pero correcto conceptualmente)
+          .neq('customer', 'Acomodo'); 
 
-      // Ajustar items: no permitir sobreasignación; filtrar items con cantidad 0
-      const adjustedItems = [];
-      for (const it of (task.items || [])) {
-        const pid = it?.product_id ?? it?.productId ?? it?.product ?? null;
-        const requested = Number(it?.quantity ?? it?.qty ?? 0) || 0;
-        if (!pid || requested <= 0) {
-          continue; // ignorar ítems inválidos
+        if (activeErr) {
+          return res.status(500).json({ error: `Error consultando tareas activas: ${activeErr.message}` });
         }
-        const reserved = reservedByProduct.get(pid) || 0;
-        const available = availableByProduct.get(pid) || 0;
-        const free = Math.max(0, available - reserved);
-        const assignQty = Math.min(requested, free);
-        if (assignQty > 0) {
-          const updated = { ...it };
-          if ('quantity' in updated || !('qty' in updated)) {
-            updated.quantity = assignQty;
-          } else {
-            updated.qty = assignQty;
+        const reservedByProduct = new Map(); // product_id -> qty
+        for (const t of (activeTasks || [])) {
+          const arr = Array.isArray(t.items) ? t.items : [];
+          for (const it of arr) {
+            const pid = it?.product_id ?? it?.productId ?? it?.product ?? null;
+            const qty = Number(it?.quantity ?? it?.qty ?? 0) || 0;
+            if (pid && qty > 0) {
+              reservedByProduct.set(pid, (reservedByProduct.get(pid) || 0) + qty);
+            }
           }
-          if (assignQty < requested) {
-            updated.notes = `${(updated.notes || '').trim()} [ajustada por reservas: ${reserved}/${available}]`.trim();
-          }
-          adjustedItems.push(updated);
         }
+        // Disponibilidad total por producto (suma de available_quantity)
+        const productsInTask = [...new Set((task.items || [])
+          .map(it => it?.product_id ?? it?.productId ?? it?.product ?? null)
+          .filter(Boolean))];
+        let availableByProduct = new Map();
+        if (productsInTask.length > 0) {
+          const { data: invRows, error: invErr } = await supabase
+            .from('inventory')
+            .select('product_id, available_quantity')
+            .in('product_id', productsInTask);
+          if (invErr) {
+            return res.status(500).json({ error: `Error consultando inventario: ${invErr.message}` });
+          }
+          availableByProduct = new Map();
+          for (const r of (invRows || [])) {
+            const pid = r.product_id;
+            const aq = Number(r.available_quantity || 0) || 0;
+            availableByProduct.set(pid, (availableByProduct.get(pid) || 0) + aq);
+          }
+        }
+
+        // Ajustar items: no permitir sobreasignación; filtrar items con cantidad 0
+        const adjustedItems = [];
+        for (const it of (task.items || [])) {
+          const pid = it?.product_id ?? it?.productId ?? it?.product ?? null;
+          const requested = Number(it?.quantity ?? it?.qty ?? 0) || 0;
+          if (!pid || requested <= 0) {
+            continue; // ignorar ítems inválidos
+          }
+          const reserved = reservedByProduct.get(pid) || 0;
+          const available = availableByProduct.get(pid) || 0;
+          const free = Math.max(0, available - reserved);
+          const assignQty = Math.min(requested, free);
+          if (assignQty > 0) {
+            const updated = { ...it };
+            if ('quantity' in updated || !('qty' in updated)) {
+              updated.quantity = assignQty;
+            } else {
+              updated.qty = assignQty;
+            }
+            if (assignQty < requested) {
+              updated.notes = `${(updated.notes || '').trim()} [ajustada por reservas: ${reserved}/${available}]`.trim();
+            }
+            adjustedItems.push(updated);
+          }
+        }
+        if (adjustedItems.length === 0 && (task.items || []).length > 0) {
+          return res.status(409).json({
+            error: 'Sin disponibilidad por reservas en tareas activas para los productos solicitados',
+          });
+        }
+        task.items = adjustedItems;
+      } catch (reserveErr) {
+        console.error('Error ajustando cantidades según reservas:', reserveErr);
+        return res.status(500).json({ error: 'Error interno ajustando cantidades' });
       }
-      if (adjustedItems.length === 0 && (task.items || []).length > 0) {
-        return res.status(409).json({
-          error: 'Sin disponibilidad por reservas en tareas activas para los productos solicitados',
-        });
-      }
-      task.items = adjustedItems;
-    } catch (reserveErr) {
-      console.error('Error ajustando cantidades según reservas:', reserveErr);
-      return res.status(500).json({ error: 'Error interno ajustando cantidades' });
     }
     // Intento de inserción. Si falla por columnas inexistentes (schema cache), reintentar con whitelist mínima
     let insertPayload = { ...task };
@@ -3243,13 +4183,18 @@ app.post('/picking/tasks', authMiddleware, async (req, res) => {
             items: insertPayload.items,
             estimatedtime: insertPayload.estimatedTime,
             notes: insertPayload.notes,
+            createdat: insertPayload.createdAt,
+            duedate: insertPayload.dueDate,
           };
           const retry = await supabase
             .from('picking_tasks')
             .insert([minimal])
             .select('*')
             .single();
-          if (retry.error) return res.status(500).json({ error: retry.error.message });
+          if (retry.error) {
+            console.error('Fallo reintento insertando picking_tasks:', retry.error);
+            return res.status(500).json({ error: retry.error.message });
+          }
           return res.json({ task: retry.data });
         }
         return res.status(500).json({ error: error.message });
@@ -3269,18 +4214,24 @@ app.post('/picking/tasks', authMiddleware, async (req, res) => {
 app.put('/picking/tasks/:id', authMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
-    // Validar permiso de gestión si se trata de una tarea de acomodo
     try {
       const { data: existing, error: readErr } = await supabase
         .from('picking_tasks')
-        .select('customer')
+        .select('customer, assignedTo, creator, assignedto')
         .eq('id', id)
         .single();
       if (!readErr && existing && /acomodo/i.test(String(existing.customer || ''))) {
         const userId = (req.user || {}).sub;
+        const userEmail = String((req.user || {}).email || '');
         const { role, permissions } = await getUserPermissionsFromDb(userId);
         const candidates = buildPermissionAliases('putaway.manage');
-        if (!hasPermissionCandidates(permissions, candidates, role)) {
+        const hasPerm = hasPermissionCandidates(permissions, candidates, role);
+        const assignedField = String(existing.assignedTo || existing.assignedto || '').toLowerCase();
+        const creatorField = String(existing.creator || '').toLowerCase();
+        const me = userEmail.toLowerCase();
+        const isAssigned = assignedField && (assignedField === me || assignedField.includes(me));
+        const isCreator = creatorField && (creatorField === me || creatorField.includes(me));
+        if (!hasPerm && !isAssigned && !isCreator && String(role).toUpperCase() !== 'ADMIN') {
           return res.status(403).json({ error: 'Permiso insuficiente', required: 'putaway.manage' });
         }
       }
@@ -3291,11 +4242,11 @@ app.put('/picking/tasks/:id', authMiddleware, async (req, res) => {
   const payload = req.body || {};
   const updates = {};
   if (payload.items !== undefined) updates.items = Array.isArray(payload.items) ? payload.items : [];
-  if (payload.destinationZone !== undefined) updates.destinationZone = payload.destinationZone || null;
-  if (payload.assignedTo !== undefined) updates.assignedTo = payload.assignedTo || '';
+  if (payload.destinationZone !== undefined) updates.destinationzone = payload.destinationZone || null;
+  if (payload.assignedTo !== undefined) updates.assignedto = payload.assignedTo || '';
   if (payload.status !== undefined) updates.status = payload.status || 'pending';
   if (payload.notes !== undefined) updates.notes = payload.notes || '';
-  if (payload.actualTime !== undefined) updates.actualTime = Number(payload.actualTime) || 0;
+  if (payload.actualTime !== undefined) updates.actualtime = Number(payload.actualTime) || 0;
 
     const { data, error } = await supabase
       .from('picking_tasks')
@@ -3304,6 +4255,109 @@ app.put('/picking/tasks/:id', authMiddleware, async (req, res) => {
       .select('*')
       .single();
     if (error) return res.status(500).json({ error: error.message });
+
+    // Si la tarea se completó y es de Acomodo, mover inventario siempre;
+    // adicionalmente, si el cliente incluye "Acomodo - <PO>", intentar marcar la OC como completada.
+    const nextStatus = updates.status !== undefined ? updates.status : data.status;
+    const customerStr = String(data.customer || '');
+    const isPutawayTask = /acomodo/i.test(customerStr);
+    if (nextStatus === 'completed' && isPutawayTask) {
+      try {
+        const poMatch = customerStr.startsWith('Acomodo - ') ? customerStr.replace('Acomodo - ', '').trim() : null;
+        if (poMatch) {
+          const { data: poData, error: poErr } = await supabase
+            .from('purchase_orders')
+            .select('id, items, status')
+            .eq('po_number', poMatch)
+            .maybeSingle();
+          if (!poErr && poData) {
+            const totalReceived = (poData.items || []).reduce((acc, it) => acc + Number(it.received_quantity || 0), 0);
+            let totalPutaway = 0;
+            const { data: fetchedTasks, error: tasksErr } = await supabase
+              .from('picking_tasks')
+              .select('items')
+              .ilike('customer', `Acomodo - ${poMatch}`)
+              .eq('status', 'completed');
+            if (!tasksErr && Array.isArray(fetchedTasks)) {
+              for (const t of fetchedTasks) {
+                if (Array.isArray(t.items)) {
+                  totalPutaway += t.items.reduce((acc, it) => acc + Number(it.quantity || 0), 0);
+                }
+              }
+            }
+            if (totalPutaway >= totalReceived && totalReceived > 0) {
+              await supabase
+                .from('purchase_orders')
+                .update({ status: 'completed', updated_at: new Date().toISOString() })
+                .eq('id', poData.id);
+              console.log(`Orden de compra ${poMatch} marcada como completada (putaway finalizado).`);
+            }
+          }
+        }
+
+        // MOVER INVENTARIO: De Recepción a Ubicación Final (independiente de PO)
+        if (data && Array.isArray(data.items)) {
+          for (const item of data.items) {
+            const sku = String(item.sku || '');
+            const qty = Number(item.quantity || 0);
+            let destLocCode = String(item.destination || '').trim();
+            if (!destLocCode) {
+              const loc = String(item.location || '').toUpperCase();
+              if (loc && loc !== 'RECV' && loc !== 'RECEPCION') destLocCode = loc;
+            }
+            if (sku && qty > 0 && destLocCode) {
+              try {
+                const { data: prod } = await supabase.from('products').select('id').eq('sku', sku).single();
+                if (prod) {
+                  const pid = prod.id;
+                  const { data: dLoc } = await supabase.from('locations').select('id, warehouse_id').eq('code', destLocCode).single();
+                  if (dLoc) {
+                    const { data: invDest } = await supabase
+                      .from('inventory')
+                      .select('id, quantity')
+                      .eq('product_id', pid)
+                      .eq('location_id', dLoc.id)
+                      .maybeSingle();
+                    if (invDest) {
+                      await supabase.from('inventory').update({ quantity: invDest.quantity + qty }).eq('id', invDest.id);
+                    } else {
+                      await supabase.from('inventory').insert({
+                        product_id: pid,
+                        location_id: dLoc.id,
+                        warehouse_id: dLoc.warehouse_id,
+                        quantity: qty,
+                        reserved_quantity: 0,
+                        last_movement_at: new Date().toISOString()
+                      });
+                    }
+                    const { data: allInv } = await supabase
+                      .from('inventory')
+                      .select('id, quantity, locations(code, location_type)')
+                      .eq('product_id', pid);
+                    if (allInv) {
+                      const sourceInv = allInv.find(i => i.locations && String(i.locations.code).toUpperCase() === 'RECV')
+                        || allInv.find(i => i.locations && i.locations.location_type === 'receiving');
+                      if (sourceInv) {
+                        const newSrcQty = Math.max(0, Number(sourceInv.quantity || 0) - qty);
+                        await supabase.from('inventory').update({ quantity: newSrcQty }).eq('id', sourceInv.id);
+                        console.log(`Inventario movido: SKU ${sku}, -${qty} de ${sourceInv.locations?.code}, +${qty} a ${destLocCode}`);
+                      }
+                    }
+                  } else {
+                    console.warn(`Ubicación destino '${destLocCode}' no encontrada para SKU ${sku}`);
+                  }
+                }
+              } catch (movErr) {
+                console.error('Error moviendo inventario al completar acomodo:', movErr);
+              }
+            }
+          }
+        }
+      } catch (checkErr) {
+        console.warn('Error verificando/moviendo inventario en putaway:', checkErr);
+      }
+    }
+
     return res.json({ task: data });
   } catch (e) {
     console.error('Error en PUT /picking/tasks/:id', e);
@@ -3339,9 +4393,16 @@ app.delete('/picking/tasks/:id', authMiddleware, async (req, res) => {
       .delete()
       .eq('id', id)
       .select('id');
-    if (delErr) return res.status(500).json({ error: delErr.message });
+    
+    // Si hay error, verificar si es porque la tabla no existe (PGRST205)
+    if (delErr) {
+      // Ignorar error de tabla faltante para permitir que el flujo continúe hacia sales_orders
+      if (delErr.code !== 'PGRST205' && !delErr.message?.includes('Could not find the table')) {
+        return res.status(500).json({ error: delErr.message });
+      }
+    }
 
-    // Si no se eliminó ningún registro, intentar como ID de sales_order directo
+    // Si no se eliminó ningún registro (o la tabla no existe), intentar como ID de sales_order directo
     if (!delRows || delRows.length === 0) {
       const { error: soErr2 } = await supabase
         .from('sales_orders')
@@ -3417,6 +4478,77 @@ function authMiddleware(req, res, next) {
     next();
   } catch (e) {
     return res.status(401).json({ error: 'Invalid token' });
+  }
+}
+
+// Reconciliación al inicio: mover inventario de RECV a destino para tareas de acomodo completadas
+async function reconcilePutawayCompleted() {
+  try {
+    const { data: tasks, error } = await supabase
+      .from('picking_tasks')
+      .select('id, customer, status, items')
+      .eq('status', 'completed');
+    if (error) {
+      console.warn('[Reconcile] Error leyendo tareas:', error?.message || error);
+      return;
+    }
+    const putawayTasks = (tasks || []).filter(t => /acomodo/i.test(String(t.customer || '')));
+    for (const t of putawayTasks) {
+      const items = Array.isArray(t.items) ? t.items : [];
+      for (const item of items) {
+        const sku = String(item.sku || '');
+        const qty = Number(item.quantity || 0);
+        let destLocCode = String(item.destination || '').trim();
+        if (!destLocCode) {
+          const loc = String(item.location || '').toUpperCase();
+          if (loc && loc !== 'RECV' && loc !== 'RECEPCION') destLocCode = loc;
+        }
+        if (!sku || !qty || qty <= 0 || !destLocCode) continue;
+        try {
+          const { data: prod } = await supabase.from('products').select('id').eq('sku', sku).maybeSingle();
+          if (!prod) continue;
+          const pid = prod.id;
+          const { data: dLoc } = await supabase.from('locations').select('id, warehouse_id').eq('code', destLocCode).maybeSingle();
+          if (!dLoc) continue;
+          const { data: allInv } = await supabase
+            .from('inventory')
+            .select('id, quantity, locations(code, location_type)')
+            .eq('product_id', pid);
+          const sourceInv = (allInv || []).find(i => i.locations && String(i.locations.code).toUpperCase() === 'RECV')
+            || (allInv || []).find(i => i.locations && i.locations.location_type === 'receiving');
+          const destInvResp = await supabase
+            .from('inventory')
+            .select('id, quantity')
+            .eq('product_id', pid)
+            .eq('location_id', dLoc.id)
+            .maybeSingle();
+          const destInv = destInvResp?.data || null;
+          const moveQty = sourceInv ? Math.min(Number(sourceInv.quantity || 0), qty) : qty;
+          if (moveQty <= 0) continue;
+          if (destInv) {
+            await supabase.from('inventory').update({ quantity: Number(destInv.quantity || 0) + moveQty }).eq('id', destInv.id);
+          } else {
+            await supabase.from('inventory').insert({
+              product_id: pid,
+              location_id: dLoc.id,
+              warehouse_id: dLoc.warehouse_id,
+              quantity: moveQty,
+              reserved_quantity: 0,
+              last_movement_at: new Date().toISOString()
+            });
+          }
+          if (sourceInv) {
+            const newSrcQty = Math.max(0, Number(sourceInv.quantity || 0) - moveQty);
+            await supabase.from('inventory').update({ quantity: newSrcQty }).eq('id', sourceInv.id);
+            console.log(`[Reconcile] SKU ${sku}: -${moveQty} RECV, +${moveQty} ${destLocCode}`);
+          }
+        } catch (e) {
+          console.warn('[Reconcile] Error moviendo inventario:', e?.message || e);
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[Reconcile] Error general:', e?.message || e);
   }
 }
 
@@ -3508,7 +4640,9 @@ function requirePermissionId(pid) {
     try {
       const userId = (req.user || {}).sub;
       if (!userId) return res.status(401).json({ error: 'No autenticado' });
-      const { role, permissions } = await getUserPermissionsFromDb(userId);
+      const db = await getUserPermissionsFromDb(userId);
+      const role = ((req.user || {}).role) || db.role || 'OPERATOR';
+      const permissions = db.permissions || [];
       const candidates = buildPermissionAliases(pid);
       if (hasPermissionCandidates(permissions, candidates, role)) return next();
       return res.status(403).json({ error: 'Permiso insuficiente', required: pid });
@@ -3524,7 +4658,9 @@ function requireAnyPermissionId(pids) {
     try {
       const userId = (req.user || {}).sub;
       if (!userId) return res.status(401).json({ error: 'No autenticado' });
-      const { role, permissions } = await getUserPermissionsFromDb(userId);
+      const db = await getUserPermissionsFromDb(userId);
+      const role = ((req.user || {}).role) || db.role || 'OPERATOR';
+      const permissions = db.permissions || [];
       for (const pid of pids) {
         const candidates = buildPermissionAliases(pid);
         if (hasPermissionCandidates(permissions, candidates, role)) return next();
@@ -3558,13 +4694,17 @@ app.post('/login', async (req, res) => {
       appUser = r2.data;
       gotPasswordHash = false;
     } else if (r.error) {
-      return res.status(500).json({ error: r.error.message });
+      const defaultRole = /admin/i.test(String(email)) ? 'ADMIN' : /manager/i.test(String(email)) ? 'MANAGER' : 'OPERATOR';
+      appUser = { id: `dev-${Buffer.from(String(email)).toString('hex').slice(0, 12)}`, email: String(email), full_name: 'Dev User', role: defaultRole, is_active: true, permissions: [], last_login: null };
+      gotPasswordHash = false;
     } else {
       appUser = r.data;
       gotPasswordHash = appUser && typeof appUser.password_hash === 'string';
     }
   } catch (e) {
-    return res.status(500).json({ error: 'Error consultando usuario' });
+    const defaultRole = /admin/i.test(String(email)) ? 'ADMIN' : /manager/i.test(String(email)) ? 'MANAGER' : 'OPERATOR';
+    appUser = { id: `dev-${Buffer.from(String(email)).toString('hex').slice(0, 12)}`, email: String(email), full_name: 'Dev User', role: defaultRole, is_active: true, permissions: [], last_login: null };
+    gotPasswordHash = false;
   }
 
   if (!appUser) {
@@ -3585,6 +4725,7 @@ app.post('/login', async (req, res) => {
   } else {
     const devCreds = [
       { email: 'admin@demo.local', pass: 'admin123' },
+      { email: 'admin@wms.com', pass: 'Admin123!' },
       { email: 'manager@wms.com', pass: 'Manager123!' },
       { email: 'operator@wms.com', pass: 'Operator123!' },
       { email: (process.env.APP_DEV_EMAIL || 'admin@local.dev'), pass: (process.env.APP_DEV_PASSWORD || 'Test1234!') },
@@ -3606,8 +4747,10 @@ app.get('/me', authMiddleware, async (req, res) => {
     .select('id,email,full_name,role,is_active,permissions,last_login')
     .eq('id', sub)
     .single();
-  if (error) return res.status(500).json({ error: error.message });
-  if (!appUser) return res.status(404).json({ error: 'Usuario no encontrado' });
+  if (error || !appUser) {
+    const fallback = { id: sub, email: req.user.email || '', full_name: 'Dev User', role: req.user.role || 'OPERATOR', is_active: true, permissions: [], last_login: null };
+    return res.json({ user: fallback });
+  }
   return res.json({ user: appUser });
 });
 
@@ -4043,11 +5186,14 @@ app.get('/products/list', async (req, res) => {
   try {
     const { q = '', limit = 200, include_inactive = 'false' } = req.query || {};
     const includeInactive = String(include_inactive).toLowerCase() === 'true' || include_inactive === true;
+    const baseLimit = Number(limit) || 200;
+    const selWithRel = 'id, sku, name, cost_price, min_stock_level, reorder_point, is_active, created_at, categories(name), default_location_id, default_location:default_location_id(code, name, location_type)';
+    const selNoRel = 'id, sku, name, cost_price, min_stock_level, reorder_point, is_active, created_at, categories(name), default_location_id';
     let query = supabase
       .from('products')
-      .select('id, sku, name, cost_price, min_stock_level, reorder_point, is_active, created_at, categories(name), default_location_id, default_location:default_location_id(code, name, location_type)')
+      .select(selWithRel)
       .order('name', { ascending: true })
-      .limit(Number(limit) || 200);
+      .limit(baseLimit);
 
     if (!includeInactive) {
       query = query.eq('is_active', true);
@@ -4060,6 +5206,18 @@ app.get('/products/list', async (req, res) => {
     }
 
     const { data, error } = await query;
+    if (error && /relationship/i.test(String(error.message || ''))) {
+      let q2 = supabase
+        .from('products')
+        .select(selNoRel)
+        .order('name', { ascending: true })
+        .limit(baseLimit);
+      if (!includeInactive) q2 = q2.eq('is_active', true);
+      if (term) q2 = q2.or(`sku.ilike.*${term}*,name.ilike.*${term}*`);
+      const { data: data2, error: err2 } = await q2;
+      if (err2) return res.status(500).json({ error: err2.message });
+      return res.json({ products: data2 || [] });
+    }
     if (error) return res.status(500).json({ error: error.message });
     return res.json({ products: data || [] });
   } catch (e) {
@@ -4813,12 +5971,10 @@ app.get('/purchase_orders', authMiddleware, async (req, res) => {
     }
 
     if (receivedOnly) {
-      // Incluir órdenes que estén en estado 'partial' o 'received'.
-      // Esto cubre tanto órdenes con items recibidos como aquellas completadas
-      // mediante flujo de ejemplo (sin items en la tabla).
+      // Incluir órdenes que estén en estado 'partial', 'received' o 'completed'.
       result = result.filter(po => {
         const st = String(po?.status || '').toLowerCase();
-        return st === 'partial' || st === 'received';
+        return st === 'partial' || st === 'received' || st === 'completed';
       });
     }
 
@@ -6044,6 +7200,10 @@ app.post('/purchase_orders/:id/receive', authMiddleware, requirePermissionId('re
     if (poErr) return res.status(500).json({ error: poErr.message });
     if (!po) return res.status(404).json({ error: 'Orden no encontrada' });
 
+    if (['received', 'completed', 'closed'].includes((po.status || '').toLowerCase())) {
+      return res.status(400).json({ error: 'La orden ya ha sido completada y no se puede modificar.' });
+    }
+
     let totalReceivedNow = 0;
 
     for (const it of items) {
@@ -6217,6 +7377,78 @@ app.post('/purchase_orders/:id/receive', authMiddleware, requirePermissionId('re
       .update(updates)
       .eq('id', id);
     if (poUpdErr) return res.status(500).json({ error: poUpdErr.message });
+
+    // -----------------------------------------------------------------------
+    // Notificación a ERP (Conectores de Salida)
+    // -----------------------------------------------------------------------
+    if (newStatus === 'received') {
+      try {
+        const { data: connectors } = await supabase
+          .from('erp_connectors')
+          .select('*')
+          .eq('is_active', true);
+
+        const outboundConnectors = (connectors || []).filter(c => 
+          c.connection_settings && 
+          c.connection_settings.direction === 'outbound'
+        );
+
+        for (const conn of outboundConnectors) {
+          try {
+            // Re-leer orden completa con items para el payload
+             const { data: fullOrder } = await supabase
+              .from('purchase_orders')
+              .select('*, purchase_order_items(*)')
+              .eq('id', id)
+              .single();
+
+            const payload = {
+              Event: 'ReceptionCompleted',
+              PurchaseOrder: fullOrder
+            };
+
+            console.log(`[ERP-OUT] Enviando notificación a ${conn.endpoint} para PO ${po.po_number}`);
+            
+            // Usar fetch nativo (Node 18+)
+            const response = await fetch(conn.endpoint, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(conn.username ? { 'Authorization': 'Basic ' + Buffer.from(conn.username + ':' + (conn.password || '')).toString('base64') } : {})
+              },
+              body: JSON.stringify(payload)
+            });
+
+            const responseText = await response.text();
+            const success = response.ok;
+
+            await supabase.from('erp_sync_logs').insert({
+              connector_id: conn.id,
+              resource_type: 'purchase_order',
+              resource_id: id,
+              operation: 'export',
+              status: success ? 'success' : 'error',
+              message: success ? 'Notification sent' : `HTTP ${response.status}`,
+              payload: payload,
+              response: responseText
+            });
+
+          } catch (connErr) {
+            console.error(`[ERP-OUT] Error conector ${conn.name}:`, connErr);
+            await supabase.from('erp_sync_logs').insert({
+              connector_id: conn.id,
+              resource_type: 'purchase_order',
+              resource_id: id,
+              operation: 'export',
+              status: 'error',
+              message: connErr.message
+            });
+          }
+        }
+      } catch (e) {
+        console.error('[ERP-OUT] Error general procesando conectores de salida:', e);
+      }
+    }
 
     return res.json({ ok: true, receivedQty: totalReceivedNow, status: newStatus });
   } catch (e) {
@@ -6600,6 +7832,11 @@ app.listen(APP_PORT, () => {
   } catch (e) {
     console.warn('[AutoSync] No se pudo iniciar:', e?.message || e);
   }
+  if (CREATE_DEFAULT_ERP_CONNECTORS_ON_BOOT) {
+    ensureDefaultERPConnectors()
+      .then(() => {})
+      .catch(() => {});
+  }
   if (CREATE_VIRTUAL_LOCATIONS_ON_BOOT) {
     ensureVirtualLocationsForAllProducts()
       .then((r) => {
@@ -6611,4 +7848,8 @@ app.listen(APP_PORT, () => {
       })
       .catch((e) => console.warn('[Boot] Error creando ubicaciones virtuales:', e?.message || e));
   }
+  // Reconciliar inventario para tareas de acomodo ya completadas
+  reconcilePutawayCompleted()
+    .then(() => console.log('[Boot] Reconciliación putaway ejecutada'))
+    .catch((e) => console.warn('[Boot] Error en reconciliación putaway:', e?.message || e));
 });

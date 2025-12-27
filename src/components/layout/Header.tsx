@@ -146,8 +146,8 @@ export function Header() {
         }
       }
 
-      // Fallback: Supabase directo
-      const [prodRes, poRes, apptRes, recvRes] = await Promise.all([
+      // Fallback: Supabase directo (omitir citas si la tabla no existe)
+      const [prodRes, poRes, recvRes] = await Promise.all([
         supabase
           .from('products')
           .select('id, sku, name, created_at, categories(name)')
@@ -156,11 +156,6 @@ export function Header() {
         supabase
           .from('purchase_orders')
           .select('id, po_number, status, order_date, expected_date, updated_at')
-          .order('updated_at', { ascending: false })
-          .limit(8),
-        supabase
-          .from('reception_appointments')
-          .select('id, appointment_number, scheduled_at, status, updated_at')
           .order('updated_at', { ascending: false })
           .limit(8),
         supabase
@@ -173,7 +168,7 @@ export function Header() {
       setNotifData({
         products: Array.isArray(prodRes.data) ? (prodRes.data as any[]) : [],
         purchase_orders: Array.isArray(poRes.data) ? (poRes.data as any[]) : [],
-        appointments: Array.isArray(apptRes.data) ? (apptRes.data as any[]) : [],
+        appointments: [],
         reception: Array.isArray(recvRes.data) ? (recvRes.data as any[]) : [],
       });
     } catch (e) {

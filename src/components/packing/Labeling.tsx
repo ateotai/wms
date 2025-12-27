@@ -20,8 +20,10 @@ type LabelRecord = {
   orderNumber: string;
   operator: string;
   seq: number;
-  batchIndex: number;
-  batchTotal: number;
+  lotIndex: number;
+  lotTotal: number;
+  labelIndex: number;
+  labelTotal: number;
   itemsCount: number;
   totalWeight: number;
   createdAt: string;
@@ -38,8 +40,10 @@ function LabelCard({ label }: { label: LabelRecord }) {
           package: label.taskNumber,
           order: label.orderNumber,
           seq: label.seq,
-          batchIndex: label.batchIndex,
-          batchTotal: label.batchTotal,
+          lot: label.lotIndex,
+          lots: label.lotTotal,
+          copy: label.labelIndex,
+          copies: label.labelTotal,
           operator: label.operator,
           items: label.itemsCount,
           weight: label.totalWeight,
@@ -59,7 +63,7 @@ function LabelCard({ label }: { label: LabelRecord }) {
           <Package className="w-4 h-4 text-blue-600" />
           <span className="text-sm font-semibold text-gray-900">{label.taskNumber}</span>
         </div>
-        <span className="text-xs font-medium text-gray-600">Etiqueta {label.batchIndex} de {label.batchTotal}</span>
+        <span className="text-xs font-medium text-gray-600">Lote {label.lotIndex}/{label.lotTotal} · Copia {label.labelIndex}/{label.labelTotal}</span>
       </div>
       <div className="grid grid-cols-2 gap-3 mt-2">
         <div>
@@ -94,7 +98,9 @@ function LabelCard({ label }: { label: LabelRecord }) {
 export function Labeling() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
-  const [labelsPerPackage, setLabelsPerPackage] = useState<number>(1);
+  const [showConfigModal, setShowConfigModal] = useState(false);
+  const [configLots, setConfigLots] = useState(1);
+  const [configLabelsPerLot, setConfigLabelsPerLot] = useState(1);
   const [preview, setPreview] = useState<LabelRecord[]>([]);
   const [showPrint, setShowPrint] = useState(false);
   const [search, setSearch] = useState('');
@@ -105,7 +111,22 @@ export function Labeling() {
   useEffect(() => {
     try {
       const str = localStorage.getItem('packing_tasks');
-      const arr: Task[] = str ? JSON.parse(str) : [];
+      let arr: Task[] = str ? JSON.parse(str) : [];
+
+      // Cleanup: Remove old tasks (before Dec 2025) as requested by user
+      const cutoff = new Date('2025-12-01').getTime();
+      const cleaned = arr.filter(t => {
+        // Keep active tasks
+        if (!['completed', 'embarked', 'shipped'].includes(t.status)) return true;
+        // Keep only recent tasks
+        return new Date(t.createdAt).getTime() > cutoff;
+      });
+
+      if (cleaned.length !== arr.length) {
+        localStorage.setItem('packing_tasks', JSON.stringify(cleaned));
+        arr = cleaned;
+      }
+
       const eligible = (Array.isArray(arr) ? arr : []).filter(t => ['completed','embarked','shipped'].includes(t.status));
       setTasks(eligible);
     } catch { setTasks([] as Task[]); }
@@ -139,7 +160,13 @@ export function Labeling() {
   const statusText = (s: Task['status']) => s === 'completed' ? 'Completado' : s === 'embarked' ? 'Embarcado' : s === 'shipped' ? 'Enviado' : s;
 
   const generateLabels = () => {
-    if (selected.length === 0 || labelsPerPackage < 1) return;
+    if (selected.length === 0) return;
+    setConfigLots(1);
+    setConfigLabelsPerLot(1);
+    setShowConfigModal(true);
+  };
+
+  const confirmGeneration = () => {
     let sequences: Record<string, number> = {};
     try {
       const seqStr = localStorage.getItem('packing_label_sequences');
@@ -151,23 +178,29 @@ export function Labeling() {
       const t = tasks.find(x => x.id === id);
       if (!t) continue;
       const base = Number(sequences[t.taskNumber] || 0);
-      for (let i = 1; i <= labelsPerPackage; i++) {
-        const seq = base + i;
-        const labelId = `${t.taskNumber}-${String(seq).padStart(3,'0')}`;
-        created.push({
-          labelId,
-          taskNumber: t.taskNumber,
-          orderNumber: t.orderNumber,
-          operator: String(t.assignedTo || ''),
-          seq,
-          batchIndex: i,
-          batchTotal: labelsPerPackage,
-          itemsCount: t.items.reduce((s, it) => s + Number(it.quantity || 0), 0),
-          totalWeight: Number(t.totalWeight || 0),
-          createdAt: now,
-        });
+      let currentSeq = base;
+      
+      for (let l = 1; l <= configLots; l++) {
+        for (let c = 1; c <= configLabelsPerLot; c++) {
+          currentSeq++;
+          const labelId = `${t.taskNumber}-${String(currentSeq).padStart(3,'0')}`;
+          created.push({
+            labelId,
+            taskNumber: t.taskNumber,
+            orderNumber: t.orderNumber,
+            operator: String(t.assignedTo || ''),
+            seq: currentSeq,
+            lotIndex: l,
+            lotTotal: configLots,
+            labelIndex: c,
+            labelTotal: configLabelsPerLot,
+            itemsCount: t.items.reduce((s, it) => s + Number(it.quantity || 0), 0),
+            totalWeight: Number(t.totalWeight || 0),
+            createdAt: now,
+          });
+        }
       }
-      sequences[t.taskNumber] = base + labelsPerPackage;
+      sequences[t.taskNumber] = currentSeq;
     }
     try {
       const listStr = localStorage.getItem('packing_labels');
@@ -176,6 +209,7 @@ export function Labeling() {
       localStorage.setItem('packing_label_sequences', JSON.stringify(sequences));
     } catch {}
     setPreview(created);
+    setShowConfigModal(false);
     setShowPrint(true);
   };
 
@@ -194,8 +228,6 @@ export function Labeling() {
             <option value="embarked">Embarcado</option>
             <option value="shipped">Enviado</option>
           </select>
-          <label className="text-sm text-gray-700">Etiquetas por paquete</label>
-          <input type="number" min={1} value={labelsPerPackage} onChange={(e) => setLabelsPerPackage(Math.max(1, Number(e.target.value)))} className="w-20 px-3 py-2 border border-gray-300 rounded-md text-sm" />
           <button onClick={generateLabels} className="inline-flex items-center px-3 py-2 bg-blue-600 text-white rounded-md text-sm font-medium">
             <Printer className="w-4 h-4 mr-2" />
             Generar etiquetas
@@ -269,6 +301,56 @@ export function Labeling() {
           </div>
         )}
       </div>
+
+      {showConfigModal && (
+        <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
+          <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Configurar Etiquetas</h3>
+              <button onClick={() => setShowConfigModal(false)} className="text-gray-400 hover:text-gray-600">×</button>
+            </div>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Cantidad de Lotes</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={configLots}
+                  onChange={(e) => setConfigLots(Math.max(1, Number(e.target.value)))}
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700">Etiquetas por Lote</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={configLabelsPerLot}
+                  onChange={(e) => setConfigLabelsPerLot(Math.max(1, Number(e.target.value)))}
+                  className="mt-1 block w-full border border-gray-300 rounded-md shadow-sm py-2 px-3 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                />
+              </div>
+              <div className="bg-gray-50 p-3 rounded text-sm text-gray-600">
+                Se generarán <strong>{configLots * configLabelsPerLot}</strong> etiquetas por paquete seleccionado.
+              </div>
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  onClick={() => setShowConfigModal(false)}
+                  className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={confirmGeneration}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700"
+                >
+                  Generar
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showPrint && preview.length > 0 && (
         <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">

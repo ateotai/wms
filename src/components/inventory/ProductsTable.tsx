@@ -6,7 +6,7 @@ import { ProductDetailModal } from './ProductDetailModal';
 import { useSearchParams } from 'react-router-dom';
 import { ProductLabelModal } from './ProductLabelModal';
 
-const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
 
 interface ProductsTableProps {
   searchTerm: string;
@@ -35,6 +35,8 @@ export function ProductsTable({ searchTerm }: ProductsTableProps) {
   const [showProductModal, setShowProductModal] = useState<boolean>(false);
   const [selectedProduct, setSelectedProduct] = useState<any | null>(null);
   const [detailLoading, setDetailLoading] = useState<boolean>(false);
+
+  // detailLoading is used inside handleViewProduct to indicate loading state
   const [detailError, setDetailError] = useState<string | null>(null);
   const [searchParams] = useSearchParams();
   const openedFromParamsRef = React.useRef<boolean>(false);
@@ -65,10 +67,88 @@ export function ProductsTable({ searchTerm }: ProductsTableProps) {
   const [locations, setLocations] = useState<LocationOption[]>([]);
   const [editLocationId, setEditLocationId] = useState<string>('');
 
+  const [putawayQtyByProduct, setPutawayQtyByProduct] = useState<Record<string, number>>({});
+  const [packingQtyByProduct, setPackingQtyByProduct] = useState<Record<string, { qty: number; status: string }>>({});
+
   const fetchProducts = async () => {
     try {
       setLoading(true);
       setError(null);
+
+      // Cargar tareas de empaquetado desde localStorage
+      try {
+        const tasksStr = localStorage.getItem('packing_tasks');
+        const tasks = tasksStr ? JSON.parse(tasksStr) : [];
+        const packingMap: Record<string, { qty: number; status: string }> = {};
+        if (Array.isArray(tasks)) {
+          tasks.forEach((t: any) => {
+            // Considerar tareas que no están canceladas
+            if (t.status !== 'cancelled' && t.items && Array.isArray(t.items)) {
+              t.items.forEach((it: any) => {
+                const sku = String(it.sku || '').trim().toUpperCase();
+                if (sku) {
+                  const current = packingMap[sku] || { qty: 0, status: 'packing' };
+                  packingMap[sku] = {
+                    qty: current.qty + Number(it.quantity || 0),
+                    status: (t.status === 'embarked' || t.status === 'shipped') ? 'embarked' : current.status
+                  };
+                }
+              });
+            }
+          });
+        }
+        setPackingQtyByProduct(packingMap);
+      } catch (e) {
+        console.warn('Error leyendo tareas de empaquetado:', e);
+      }
+
+      // Cargar tareas de acomodo activas para calcular cantidades "En acomodo"
+      let putawayMap: Record<string, number> = {};
+      if (AUTH_BACKEND_URL) {
+        try {
+          const token = localStorage.getItem('app_token');
+          // Intentar endpoint de acomodo primero
+          let tasks: any[] = [];
+          try {
+            const resp = await fetch(`${AUTH_BACKEND_URL}/putaway/tasks`, {
+               headers: token ? { Authorization: `Bearer ${token}` } : {}
+            });
+            if (resp.ok) {
+              const json = await resp.json();
+              tasks = Array.isArray(json.tasks) ? json.tasks : [];
+            }
+          } catch {}
+          
+          if (tasks.length === 0) {
+            // Fallback a picking/tasks
+             const resp = await fetch(`${AUTH_BACKEND_URL}/picking/tasks`, {
+              headers: token ? { Authorization: `Bearer ${token}` } : {}
+            });
+            if (resp.ok) {
+              const json = await resp.json();
+              tasks = Array.isArray(json.tasks) ? json.tasks : [];
+            }
+          }
+
+          tasks.forEach((t: any) => {
+            const isPutaway = String(t.customer || '').toLowerCase().includes('acomodo') || t.type === 'putaway';
+            const isActive = t.status === 'pending' || t.status === 'in_progress';
+            if (isPutaway && isActive && Array.isArray(t.items)) {
+              t.items.forEach((it: any) => {
+                if (it.sku) {
+                  const q = Number(it.quantity || 0);
+                  const p = Number(it.picked || 0);
+                  const rem = Math.max(0, q - p);
+                  putawayMap[it.sku] = (putawayMap[it.sku] || 0) + rem;
+                }
+              });
+            }
+          });
+          setPutawayQtyByProduct(putawayMap);
+        } catch (e) {
+          console.warn('Error cargando tareas de acomodo:', e);
+        }
+      }
 
       let rows: ProductRow[] = [];
 
@@ -139,7 +219,7 @@ export function ProductsTable({ searchTerm }: ProductsTableProps) {
       }
 
       setProducts(rows);
-      await loadInventoryInfo(rows);
+      await loadInventoryInfo(rows, putawayMap);
     } catch (err) {
       console.error('Error al cargar productos:', err);
       setError('Error al cargar el catálogo de productos');
@@ -149,11 +229,15 @@ export function ProductsTable({ searchTerm }: ProductsTableProps) {
   };
 
   // Nuevo helper dentro del componente
-  const loadInventoryInfo = async (rows: ProductRow[]) => {
+  const loadInventoryInfo = async (rows: ProductRow[], putawayMap: Record<string, number> = {}) => {
     try {
       const ids = rows
         .map((r) => r.id)
         .filter((id) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id));
+      
+      const idToSku: Record<string, string> = {};
+      rows.forEach(r => { idToSku[r.id] = r.sku; });
+
       if (ids.length === 0) {
         setInventoryInfoByProduct({});
         setStockTotalsByProduct({});
@@ -195,6 +279,7 @@ export function ProductsTable({ searchTerm }: ProductsTableProps) {
       const infoMap: Record<string, { location: string; status: string }> = {};
       const totalMap: Record<string, number> = {};
       const recvMap: Record<string, number> = {};
+      const locsMap: Record<string, Array<{ code: string; isRecv: boolean; qty: number }>> = {};
       let recvTotal = 0;
 
       (rowsInv || []).forEach((row: any) => {
@@ -202,12 +287,16 @@ export function ProductsTable({ searchTerm }: ProductsTableProps) {
         const qty = Number(row?.quantity ?? row?.available_quantity ?? 0);
         const reserved = Number(row?.reserved_quantity ?? 0);
         const code: string = String(row?.location_code ?? row?.locations?.code ?? '').toUpperCase();
-        const locType: string = String(row?.location_type ?? row?.locations?.location_type ?? '');
-        // Considerar ubicaciones de recepción y cuarentena como "en recepción"
-        const isRecv = locType === 'receiving' || locType === 'quarantine' || code === 'RECV' || code === 'QC';
+        const locType: string = String(row?.location_type ?? row?.locations?.location_type ?? '').toLowerCase();
+        // Considerar 'receiving', 'RECV' y SIN UBICACIÓN como recepción.
+        // Las ubicaciones virtuales (VIRT-) y de cuarentena se considerarán RECEPCIÓN (según última corrección del usuario).
+        // NOTA: No usar !row.locations porque el backend devuelve estructura plana sin objeto locations.
+        const isRecv = locType === 'receiving' || locType === 'quarantine' || code === 'RECV' || code.startsWith('VIRT-') || (!row.locations && !row.location_code && !row.location_id);
 
-        // Stock total: sumar cantidad en todas las ubicaciones
-        totalMap[pid] = (totalMap[pid] || 0) + qty;
+        // Stock total: sumar cantidad SOLO en ubicaciones de almacenamiento (excluir recepción)
+        if (!isRecv) {
+          totalMap[pid] = (totalMap[pid] || 0) + qty;
+        }
 
         // Recepción: sumar cantidad en ubicaciones de recepción (no solo reservado)
         if (isRecv) {
@@ -215,13 +304,65 @@ export function ProductsTable({ searchTerm }: ProductsTableProps) {
           recvTotal += qty;
         }
 
-        // Mostrar siempre el código de ubicación definido, sin reemplazar por etiqueta
-        const display: string = code || '—';
-        const status: string = isRecv && qty > 0 ? 'En recepción' : qty > 0 ? 'En stock' : 'Sin inventario';
-        const prev = infoMap[pid];
-        if (!prev || prev.status !== 'En recepción') {
-          infoMap[pid] = { location: display || '—', status };
+        if (!locsMap[pid]) locsMap[pid] = [];
+        locsMap[pid].push({ code, isRecv, qty });
+      });
+
+      // Post-proceso para determinar el estado final y la mejor ubicación para mostrar
+      const normalizeSku = (val: string) => String(val || '').trim().toUpperCase();
+
+      Object.keys(locsMap).forEach(pid => {
+        const sku = normalizeSku(idToSku[pid]);
+        const rQty = recvMap[pid] || 0;
+        const tQty = totalMap[pid] || 0;
+        const locs = locsMap[pid] || [];
+        const pQty = putawayMap[sku] || 0;
+        
+        let status = 'Sin inventario';
+        let displayLoc = '—';
+        
+        if (pQty > 0) {
+            // Ajustar pQty para no exceder lo que realmente hay en recepción
+            const effectivePQty = Math.min(pQty, rQty);
+            const remainder = Math.max(0, rQty - effectivePQty);
+            
+            if (effectivePQty > 0) {
+                if (remainder > 0) {
+                    status = `Acomodo: ${effectivePQty} / Rec: ${remainder}`;
+                } else {
+                    status = `Acomodo: ${effectivePQty}`;
+                }
+            } else if (rQty > 0) {
+                 // Si hay tarea pero effective es 0 (ej. rQty=0? no, rQty>0 aqui),
+                 // o pQty era > 0 pero rQty=0 (no entra aqui por rQty>0)
+                 // Si effectivePQty es 0, significa que rQty es 0 (por min).
+                 // Pero si rQty > 0, entonces effectivePQty > 0 (si pQty > 0).
+                 // Entonces este else if solo se alcanza si pQty=0 (cubierto abajo) o lógica rara.
+                 // Si pQty > 0 y rQty > 0, effective siempre > 0.
+                 // Si rQty = 0, effective = 0. Remainder = 0.
+                 // Entonces no entra en if (effective > 0).
+                 // Cae aqui? No, porque rQty > 0 es falso.
+                 // Cae al siguiente else if (tQty > 0). -> En stock. Correcto.
+                 status = `En recepción: ${rQty}`;
+            }
+            // Si rQty es 0, cae al final (En stock o Sin inventario).
+            displayLoc = '—';
+        } else if (rQty > 0) {
+            status = `En recepción: ${rQty}`;
+            // El usuario pidió NO mostrar ubicación si está en recepción
+            displayLoc = '—';
+        } else if (tQty > 0) {
+            status = 'En stock';
+            // Priorizar ubicación con stock (no recepción)
+            const l = locs.find(x => !x.isRecv && x.qty > 0) || locs.find(x => x.qty > 0);
+            if (l) displayLoc = l.code;
+        } else {
+            // Usar cualquier ubicación disponible si no hay stock, EXCEPTO recepción
+            const l = locs.find(x => !x.isRecv);
+            if (l) displayLoc = l.code;
         }
+        
+        infoMap[pid] = { location: displayLoc || '—', status };
       });
 
       setInventoryInfoByProduct(infoMap);
@@ -279,7 +420,7 @@ export function ProductsTable({ searchTerm }: ProductsTableProps) {
     setEditProduct(p);
     setEditMin(String(p.min_stock_level ?? 0));
     setEditReorder(String(p.reorder_point ?? (p.min_stock_level ?? 0)));
-    setEditMax(String(p as any).max_stock_level ?? '');
+    setEditMax(String((p as any).max_stock_level ?? ''));
     // Cargar ubicaciones y default_location del producto
     await loadLocations();
     try {
@@ -504,7 +645,7 @@ export function ProductsTable({ searchTerm }: ProductsTableProps) {
   const handleViewProduct = async (prod: ProductRow) => {
     try {
       setDetailError(null);
-      setDetailLoading(true);
+setDetailLoading?.(true);
       let query = supabase
         .from('products')
         .select('id, sku, name, description, unit_of_measure, cost_price, selling_price, min_stock_level, max_stock_level, reorder_point, barcode, weight, dimensions, is_active, categories(name)')
@@ -684,12 +825,13 @@ export function ProductsTable({ searchTerm }: ProductsTableProps) {
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Producto</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">SKU</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Categoría</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Recepción</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stock total</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ubicación</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Estado</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Costo</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Entrada</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Salidas</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Precio</th>
                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Acciones</th>
               </tr>
             </thead>
@@ -705,16 +847,14 @@ export function ProductsTable({ searchTerm }: ProductsTableProps) {
                       </div>
                       <div className="ml-4">
                         <div className="text-sm font-medium text-gray-900">{p.name}</div>
-                        <div className="text-sm text-gray-500">{p.sku}</div>
                       </div>
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-900">{p.category || 'Sin categoría'}</div>
+                    <div className="text-sm text-gray-900 font-mono">{p.sku || '—'}</div>
                   </td>
-                  {/* Recepción */}
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {receivingUnitsByProduct[p.id] ?? 0}
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="text-sm text-gray-900">{p.category || 'Sin categoría'}</div>
                   </td>
                   {/* Stock total */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -730,22 +870,45 @@ export function ProductsTable({ searchTerm }: ProductsTableProps) {
                     </div>
                   </td>
                   {/* Estado */}
-                  <td className={`px-6 py-4 whitespace-nowrap`}>
-                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                      inventoryInfoByProduct[p.id]?.status === 'En recepción'
-                        ? 'bg-blue-50 text-blue-700'
-                        : inventoryInfoByProduct[p.id]?.status === 'En stock'
-                          ? 'bg-green-50 text-green-700'
-                          : 'bg-gray-100 text-gray-600'
-                    }`}>
-                      {inventoryInfoByProduct[p.id]?.status ?? '—'}
-                    </span>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    {(() => {
+                      const status = inventoryInfoByProduct[p.id]?.status;
+                      
+                      return (
+                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                          status === 'En stock'
+                            ? 'bg-green-50 text-green-700'
+                            : (String(status || '').includes('Acomodo') || String(status || '').includes('Recepción')) 
+                                ? 'bg-blue-50 text-blue-700' 
+                                : 'bg-gray-100 text-gray-600'
+                        }`}>
+                          {status ?? '—'}
+                        </span>
+                      );
+                    })()}
                   </td>
-                  {/* Costo */}
+                  {/* Salidas */}
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    {(() => {
+                      const data = packingQtyByProduct[String(p.sku || '').trim().toUpperCase()];
+                      if (data && data.qty > 0) {
+                        const isEmbarked = data.status === 'embarked' || data.status === 'shipped';
+                        return (
+                           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                             isEmbarked ? 'bg-indigo-100 text-indigo-800' : 'bg-orange-100 text-orange-800'
+                           }`}>
+                             {isEmbarked ? 'Embarcado: ' : 'Empaquetado: '}{data.qty}
+                           </span>
+                        );
+                      }
+                      return <span className="text-gray-400 text-sm">—</span>;
+                    })()}
+                  </td>
+                  {/* Precio */}
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                    {formatCurrency(Number(p.cost_price ?? 0))}
+                    {formatCurrency(Number(p.selling_price ?? 0))}
                   </td>
-          <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
             <div className="flex items-center justify-end space-x-2">
               <button onClick={() => handleViewProduct(p)} className="text-blue-600 hover:text-blue-900" title="Ver detalles">
                 <Eye className="h-4 w-4" />

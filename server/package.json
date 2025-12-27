@@ -6,7 +6,11 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "migrate:picking_tasks": "node scripts/migrate_picking_tasks.js"
+    "migrate:picking_tasks": "node scripts/migrate_picking_tasks.js",
+    "migrate:file": "node scripts/run_sql.js",
+    "migrate:setup": "node scripts/run_sql.js database/setup_complete_database.sql",
+    "migrate:railway": "node scripts/run_sql.js database/setup_railway.sql",
+    "create:admin": "node scripts/create_admin_user.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
-import { Map, Settings, BarChart3, Package, MapPin, Warehouse as WarehouseIcon, Rows, Layers, AlertTriangle } from 'lucide-react';
+import { Map as MapIcon, Settings, BarChart3, Package, MapPin, Warehouse as WarehouseIcon, Rows, Layers, AlertTriangle } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { WarehouseMap } from './WarehouseMap';
 import { ZoneConfiguration } from './ZoneConfiguration';
@@ -66,7 +66,7 @@ export function WarehouseLayout() {
     {
       id: 'map',
       name: 'Mapa del Almacén',
-      icon: Map,
+      icon: MapIcon,
       path: '/warehouse/map'
     },
     {
@@ -369,7 +369,7 @@ function WarehouseAnalytics() {
           <div className="bg-purple-50 p-4 rounded-lg">
             <div className="flex items-center">
               <div className="p-2 bg-purple-100 rounded-lg">
-                <Map className="w-6 h-6 text-purple-600" />
+                <MapIcon className="w-6 h-6 text-purple-600" />
               </div>
               <div className="ml-4">
                 <p className="text-sm font-medium text-gray-600">Eficiencia</p>

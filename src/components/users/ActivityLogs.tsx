@@ -237,22 +237,31 @@ export function ActivityLogs() {
 
       if (movementsError) throw movementsError;
 
-      const transformedLogs: ActivityLog[] = ((movements || []) as MovementRow[]).map((movement) => ({
-        id: movement.id,
-        user_id: movement.performed_by || 'system',
-        user_name: movement.profiles?.full_name || 'Sistema',
-        user_role: movement.profiles?.role || 'system',
-        action: `${movement.transaction_type} - ${movement.products?.name || 'Producto'}`,
-        action_type: 'update' as const,
-        resource: 'Inventario',
-        resource_id: movement.products?.sku,
-        details: `${movement.transaction_type}: ${movement.quantity} unidades. ${movement.reason || movement.notes || ''}`,
-        ip_address: '192.168.1.100',
-        user_agent: 'Sistema WMS',
-        created_at: movement.created_at,
-        status: 'success' as const,
-        duration: Math.floor(Math.random() * 5) + 1
-      }));
+      const transformedLogs: ActivityLog[] = ((movements || []) as unknown as MovementRow[]).map((movement) => {
+        const profile = Array.isArray(movement.profiles)
+          ? movement.profiles[0] || null
+          : movement.profiles || null;
+        const product = Array.isArray(movement.products)
+          ? movement.products[0] || null
+          : movement.products || null;
+
+        return {
+          id: movement.id,
+          user_id: movement.performed_by || 'system',
+          user_name: profile?.full_name || 'Sistema',
+          user_role: profile?.role || 'system',
+          action: `${movement.transaction_type} - ${product?.name || 'Producto'}`,
+          action_type: 'update' as const,
+          resource: 'Inventario',
+          resource_id: product?.sku || undefined,
+          details: `${movement.transaction_type}: ${movement.quantity} unidades. ${movement.reason || movement.notes || ''}`,
+          ip_address: '192.168.1.100',
+          user_agent: 'Sistema WMS',
+          created_at: movement.created_at,
+          status: 'success' as const,
+          duration: Math.floor(Math.random() * 5) + 1
+        };
+      });
 
       setActivityLogs(transformedLogs);
     } catch (err) {

@@ -47,6 +47,7 @@ export function Putaway() {
   const [poPendingById, setPoPendingById] = useState<Record<string, number>>({});
   const [selectedPO, setSelectedPO] = useState<PurchaseOrder | null>(null);
   const [poDetail, setPoDetail] = useState<PurchaseOrderDetail | null>(null);
+  const [poFilter, setPoFilter] = useState<'pending' | 'completed' | 'all'>('pending');
 
   // Estado del modal de creación
   const [showModal, setShowModal] = useState(false);
@@ -78,26 +79,7 @@ export function Putaway() {
       const detailJson = await detailResp.json();
       const d = detailJson?.purchase_order || detailJson;
 
-      let reservedBySku = new Map<string, number>();
-      const tasksResp = await fetch(`${AUTH_BACKEND_URL}/picking/tasks`, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (tasksResp.ok) {
-        const tj = await tasksResp.json();
-        const tasks = Array.isArray(tj?.tasks) ? tj.tasks : [];
-        for (const t of tasks) {
-          const isPutaway = String(t.customer || '').toLowerCase().includes('acomodo');
-          const isRelevant = String(t.status || 'pending') !== 'cancelled';
-          // Restar cantidades de cualquier tarea de acomodo no cancelada (pendiente, en progreso, o completada)
-          if (isPutaway && isRelevant && Array.isArray(t.items)) {
-            for (const it of t.items) {
-              const sku = normalizeSku(String(it.sku || ''));
-              const qty = Number(it.quantity || 0);
-              reservedBySku.set(sku, (reservedBySku.get(sku) || 0) + qty);
-            }
-          }
-        }
-      }
+      const reservedBySkuMap = new Map<string, number>(Object.entries(reservedBySku).map(([k, v]) => [normalizeSku(k), Number(v || 0)]));
 
       // Resolver SKU cuando viene vacío o como UUID para empatar con tareas
       const resolveSkuFromProductId = async (productId: string | number): Promise<string | null> => {
@@ -147,7 +129,7 @@ export function Putaway() {
         }
         sku = sku || 'SKU';
         const received = Number((it as any).received_quantity || 0);
-        const reserved = reservedBySku.get(sku) || 0;
+        const reserved = reservedBySkuMap.get(sku) || 0;
         remainingTotal += Math.max(0, received - reserved);
       }
       return remainingTotal;
@@ -167,6 +149,37 @@ export function Putaway() {
           setLoading(false);
           return;
         }
+
+        // 1. Cargar Tareas de Acomodo (Picking Tasks) PRIMERO
+        // Para saber qué SKUs ya están "reservados" (en tarea pendiente, en progreso O completada)
+        let reservedMap: Record<string, number> = {};
+        try {
+          const tasksResp = await fetch(`${AUTH_BACKEND_URL}/putaway/tasks`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          });
+          if (tasksResp.ok) {
+            const tj = await tasksResp.json();
+            const tasks = Array.isArray(tj?.tasks) ? tj.tasks : [];
+            for (const t of tasks) {
+              const isPutaway = String(t.customer || '').toLowerCase().includes('acomodo');
+              // IMPORTANTE: Incluir 'completed' para que cuente como ya procesado y no disponible
+              const isRelevant = String(t.status || 'pending') !== 'cancelled';
+              
+              if (isPutaway && isRelevant && Array.isArray(t.items)) {
+                for (const it of t.items) {
+                  const sku = normalizeSku(String(it.sku || ''));
+                  const qty = Number(it.quantity || 0);
+                  if (!sku) continue;
+                  reservedMap[sku] = (reservedMap[sku] || 0) + qty;
+                }
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('Error cargando tareas:', e);
+        }
+        setReservedBySku(reservedMap);
+
         if (mode === 'items') {
           const resp = await fetch(`${AUTH_BACKEND_URL}/inventory/movements?type=IN&period=30days&transaction_type=RECEIPT&limit=200`, {
             headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -210,40 +223,11 @@ export function Putaway() {
                 return r;
               });
             } catch {
-              // noop: si falla la resolución, dejamos filas tal cual
+              // noop
             }
           }
 
           setMovements(rows);
-
-          // Calcular reservas abiertas de tareas de acomodo por SKU
-          try {
-            const tasksResp = await fetch(`${AUTH_BACKEND_URL}/picking/tasks`, {
-              headers: token ? { Authorization: `Bearer ${token}` } : {},
-            });
-            if (tasksResp.ok) {
-              const tj = await tasksResp.json();
-              const tasks = Array.isArray(tj?.tasks) ? tj.tasks : [];
-              const map: Record<string, number> = {};
-              for (const t of tasks) {
-                const isPutaway = String(t.customer || '').toLowerCase().includes('acomodo');
-                const isOpen = String(t.status || 'pending') !== 'cancelled' && String(t.status || 'pending') !== 'completed';
-                if (isPutaway && isOpen && Array.isArray(t.items)) {
-                  for (const it of t.items) {
-                    const sku = String(it.sku || '');
-                    const qty = Number(it.quantity || 0);
-                    if (!sku) continue;
-                    map[sku] = (map[sku] || 0) + qty;
-                  }
-                }
-              }
-              setReservedBySku(map);
-            } else {
-              setReservedBySku({});
-            }
-          } catch {
-            setReservedBySku({});
-          }
 
           // Cargar órdenes de compra con estatus de recibido para filtrar referencias
           try {
@@ -269,22 +253,69 @@ export function Putaway() {
           const arr = Array.isArray(json?.purchase_orders) ? json.purchase_orders : [];
           const baseList = arr.map((p: any) => ({ id: p.id, po_number: p.po_number, status: p.status }));
 
-          // Filtrar OCs que ya no tienen artículos pendientes (por tareas de acomodo existentes)
+          // Filtrar OCs que ya no tienen artículos pendientes
+          // Usamos reservedMap ya calculado para evitar re-fetch
+          const resolveSkuFromProductIdLocal = async (productId: string | number): Promise<string | null> => {
+            try {
+               const { data } = await supabase.from('products').select('sku').eq('id', String(productId)).single();
+               if ((data as any)?.sku) return String((data as any).sku);
+            } catch {}
+            return null;
+          };
+
+          const skuCacheLocal = new Map<string, string>();
+
           try {
             const remainingList = await Promise.all(
-              baseList.map(async (po) => ({ po, remaining: await computeRemainingForPo(po) }))
+              baseList.map(async (po: any) => {
+                // Fetch details for items
+                try {
+                  const detailResp = await fetch(`${AUTH_BACKEND_URL}/purchase_orders/${po.id}`, {
+                    headers: token ? { Authorization: `Bearer ${token}` } : {},
+                  });
+                  if (!detailResp.ok) return { po, remaining: 0 }; // Error, asumir 0
+                  const detailJson = await detailResp.json();
+                  const d = detailJson?.purchase_order || detailJson;
+                  
+                  const filteredItems = (d.items || []).filter((it: any) => Number(it.received_quantity || 0) > 0);
+                  let remainingTotal = 0;
+                  
+                  for (const it of filteredItems) {
+                    let rawSku = normalizeSku(String((it as any).sku ?? it.products?.sku ?? ''));
+                    let sku = rawSku;
+                    if (!sku || isUuid(sku)) {
+                      const pid = it?.product_id ? String(it.product_id) : '';
+                      if (pid) {
+                        if (skuCacheLocal.has(pid)) {
+                          sku = skuCacheLocal.get(pid)!;
+                        } else {
+                          const resolved = await resolveSkuFromProductIdLocal(pid);
+                          if (resolved) {
+                            skuCacheLocal.set(pid, resolved);
+                            sku = normalizeSku(resolved);
+                          }
+                        }
+                      }
+                    }
+                    sku = sku || 'SKU';
+                    const received = Number((it as any).received_quantity || 0);
+                    const reserved = reservedMap[sku] || 0;
+                    remainingTotal += Math.max(0, received - reserved);
+                  }
+                  return { po, remaining: remainingTotal };
+                } catch {
+                  return { po, remaining: 0 };
+                }
+              })
             );
+            
             const pendingMap: Record<string, number> = {};
             for (const r of remainingList) {
               if (typeof r.remaining === 'number') pendingMap[String(r.po.id)] = Number(r.remaining || 0);
             }
-            const filtered = remainingList
-              .filter((r) => typeof r.remaining === 'number' ? r.remaining > 0 : true)
-              .map((r) => r.po);
             setPoPendingById(pendingMap);
-            setReceivedPOs(filtered);
+            setReceivedPOs(remainingList.map((r: any) => r.po));
           } catch {
-            // Si falla el cálculo, mostrar la lista base
             setReceivedPOs(baseList);
           }
         }
@@ -413,34 +444,9 @@ export function Putaway() {
         } catch {}
         return null;
       };
-      // Cargar tareas de acomodo y restar cantidades ya reservadas para esta OC
-      let reservedBySku = new Map<string, number>();
-      try {
-        if (AUTH_BACKEND_URL) {
-          const resp = await fetch(`${AUTH_BACKEND_URL}/picking/tasks`, {
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
-          });
-          if (resp.ok) {
-            const json = await resp.json();
-            const tasks = Array.isArray(json?.tasks) ? json.tasks : [];
-            for (const t of tasks) {
-              const isPutaway = String(t.customer || '').toLowerCase().includes('acomodo');
-              const isRelevant = String(t.status || 'pending') !== 'cancelled';
-              // Restar cantidades de cualquier tarea de acomodo no cancelada (pendiente, en progreso, o completada)
-              if (isPutaway && isRelevant && Array.isArray(t.items)) {
-                for (const it of t.items) {
-                  const sku = normalizeSku(String(it.sku || ''));
-                  const qty = Number(it.quantity || 0);
-                  reservedBySku.set(sku, (reservedBySku.get(sku) || 0) + qty);
-                }
-              }
-            }
-          }
-        }
-      } catch (e) {
-        console.warn('No se pudo calcular reservados de acomodo para la OC:', e);
-      }
-
+      // Usar reservedBySku ya cargado en el estado
+      // No es necesario volver a hacer fetch de picking/tasks aquí
+      
       const items = (await Promise.all(
         (poDetail.items || [])
           .filter(it => Number(it.received_quantity || 0) > 0)
@@ -454,7 +460,7 @@ export function Putaway() {
             // No usar product_id como SKU visible; usar marcador si no disponible
             if (!sku) sku = 'SKU';
             const received = Number(it.received_quantity || 0);
-            const reserved = reservedBySku.get(sku) || 0;
+            const reserved = reservedBySku[sku] || 0;
             const remaining = Math.max(0, received - reserved);
             return {
               sku,
@@ -574,25 +580,63 @@ export function Putaway() {
         <div className="bg-white border border-gray-200 rounded-lg p-4">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center text-gray-700 text-sm"><Truck className="w-4 h-4 mr-2"/> Órdenes de compra recibidas</div>
-            <div className="text-sm text-gray-500">{receivedPOs.length} órdenes</div>
+            <div className="flex items-center space-x-2">
+              <select
+                value={poFilter}
+                onChange={(e) => setPoFilter(e.target.value as 'pending' | 'completed' | 'all')}
+                className="text-xs border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500"
+              >
+                <option value="pending">Pendientes</option>
+                <option value="completed">Completadas</option>
+                <option value="all">Todas</option>
+              </select>
+              <div className="text-sm text-gray-500">{receivedPOs.length} total</div>
+            </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="md:col-span-1">
               <div className="border border-gray-200 rounded-lg overflow-hidden">
                 <div className="bg-gray-50 px-3 py-2 text-sm font-medium text-gray-700">Listado</div>
                 <div className="max-h-64 overflow-y-auto divide-y divide-gray-100">
-                  {receivedPOs.map(po => (
+                  {receivedPOs.filter(po => {
+                    const rem = Number(poPendingById[String(po.id)]||0);
+                    // Si está marcada como completed O tiene 0 pendientes, se considera completada
+                    const isCompleted = po.status === 'completed' || rem === 0;
+
+                    if (poFilter === 'all') return true;
+                    if (poFilter === 'completed') return isCompleted;
+                    return !isCompleted; // pending
+                  }).map(po => {
+                    const rem = Number(poPendingById[String(po.id)]||0);
+                    const isCompleted = po.status === 'completed' || rem === 0;
+                    return (
                     <button
                       key={String(po.id)}
                       onClick={() => { setSelectedPO(po); loadPoDetail(po.id); }}
                       className={`w-full text-left px-3 py-2 text-sm flex items-center justify-between ${selectedPO?.id===po.id ? 'bg-blue-50 text-blue-700' : 'hover:bg-gray-50 text-gray-700'}`}
                     >
                       <span>{po.po_number}</span>
-                      <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${Number(poPendingById[String(po.id)]||0) > 0 ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
-                        Pendiente {Number(poPendingById[String(po.id)]||0)}
-                      </span>
+                      {isCompleted ? (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                          Completado
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                          Pendiente {rem}
+                        </span>
+                      )}
                     </button>
-                  ))}
+                  )})}
+                  {receivedPOs.filter(po => {
+                    if (poFilter === 'all') return true;
+                    const rem = Number(poPendingById[String(po.id)]||0);
+                    const isCompleted = po.status === 'completed' || rem === 0;
+                    return !isCompleted;
+                  }).length === 0 && (
+                    <div className="px-3 py-4 text-center text-sm text-gray-500">
+                      No hay órdenes {poFilter === 'pending' ? 'pendientes' : ''}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -732,6 +776,7 @@ function PutawayTaskModal({
   const [zones, setZones] = useState<string[]>([]);
   const [zonesLoading, setZonesLoading] = useState(false);
   const [emptyLocationCodes, setEmptyLocationCodes] = useState<string[]>([]);
+  const [isCreating, setIsCreating] = useState(false);
 
   const dueDate = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
 
@@ -812,6 +857,128 @@ function PutawayTaskModal({
     loadEmptyLocations();
   }, [AUTH_BACKEND_URL, token]);
 
+  // Limpieza automática de tareas de acomodo locales (solicitado por usuario)
+  useEffect(() => {
+    try {
+      // Forzar limpieza siempre al montar el componente
+      const raw = localStorage.getItem('picking_tasks');
+      if (raw) {
+        const tasks = JSON.parse(raw);
+        // Filtrar y eliminar CUALQUIER tarea que sea de "Acomodo"
+        const filtered = tasks.filter((t: any) => String(t.customer || '').toLowerCase() !== 'acomodo');
+        
+        if (tasks.length !== filtered.length) {
+          localStorage.setItem('picking_tasks', JSON.stringify(filtered));
+          // Disparar evento para que otros componentes (como PickingTasks) se actualicen
+          window.dispatchEvent(new Event('picking_tasks_updated'));
+          console.log('Limpieza FORZADA: tareas de acomodo locales eliminadas.');
+        }
+      }
+    } catch (e) {
+      console.error('Error limpiando tareas locales:', e);
+    }
+  }, []);
+
+  // Auto-asignación de ubicaciones destino (lógica dinámica)
+  useEffect(() => {
+    let isMounted = true;
+    const autoAssign = async () => {
+      // Solo ejecutar si hay items sin destino y tenemos capacidad de sugerir (ya cargó emptyLocationCodes o al menos intentó)
+      const pendingIndices = editableItems.map((it, idx) => !it.destination ? idx : -1).filter(i => i !== -1);
+      if (pendingIndices.length === 0) return;
+
+      if (!AUTH_BACKEND_URL || !token) return;
+
+      const newItems = [...editableItems];
+      let changed = false;
+
+      // 1. Identificar destinos ya usados para no repetir al asignar vacíos
+      const usedDestinations = new Set(newItems.map(i => i.destination).filter(Boolean));
+      // Filtrar emptyLocationCodes para tener solo disponibles
+      const availableEmpty = emptyLocationCodes.filter(c => !usedDestinations.has(c));
+      let emptyCursor = 0;
+
+      // Cache para no consultar repetidamente el mismo SKU
+      const skuLocCache = new Map<string, string>();
+
+      for (const idx of pendingIndices) {
+        if (!isMounted) break;
+        const item = newItems[idx];
+        const sku = item.sku;
+        if (!sku) continue;
+
+        let bestLoc = skuLocCache.get(sku);
+
+        if (!bestLoc) {
+          // A. Buscar stock existente para consolidar (Picking o Storage)
+          try {
+            const invResp = await fetch(`${AUTH_BACKEND_URL}/inventory/list?q=${encodeURIComponent(sku)}&limit=20`, {
+              headers: { Authorization: `Bearer ${token}` }
+            });
+            if (invResp.ok) {
+              const invJson = await invResp.json();
+              const candidates = (invJson.inventory || []).filter((r: any) => 
+                (String(r.location_type).toLowerCase() === 'picking' || String(r.location_type).toLowerCase() === 'storage')
+              );
+              // Preferir la que tenga más cantidad o simplemente la primera
+              if (candidates.length > 0) {
+                bestLoc = candidates[0].location_code || candidates[0].location;
+              }
+            }
+          } catch {}
+
+          // B. Si no hay stock, buscar ubicación por defecto del producto
+          if (!bestLoc) {
+            try {
+              const prodResp = await fetch(`${AUTH_BACKEND_URL}/products/list?q=${encodeURIComponent(sku)}&limit=1`, {
+                headers: { Authorization: `Bearer ${token}` }
+              });
+              if (prodResp.ok) {
+                const prodJson = await prodResp.json();
+                const prod = prodJson.products?.[0];
+                if (prod?.default_location?.code) {
+                  bestLoc = prod.default_location.code;
+                }
+              }
+            } catch {}
+          }
+        }
+
+        // C. Si no tiene ubicación previa ni default, asignar una vacía
+        if (!bestLoc) {
+           if (emptyCursor < availableEmpty.length) {
+             bestLoc = availableEmpty[emptyCursor];
+             emptyCursor++;
+           }
+        }
+
+        if (bestLoc) {
+          newItems[idx] = { ...item, destination: bestLoc };
+          skuLocCache.set(sku, bestLoc);
+          changed = true;
+        }
+      }
+
+      if (changed && isMounted) {
+        // Ordenar items por ubicación destino para optimizar recorrido
+        newItems.sort((a, b) => {
+          const da = a.destination || 'ZZZ';
+          const db = b.destination || 'ZZZ';
+          return da.localeCompare(db, undefined, { numeric: true });
+        });
+        setEditableItems(newItems);
+      }
+    };
+
+    // Ejecutar cuando se carguen las ubicaciones vacías (señal de que podemos empezar a sugerir)
+    // o si cambian los items iniciales (aunque editableItems es state)
+    if (emptyLocationCodes.length > 0 || (items.length > 0 && emptyLocationCodes.length === 0)) { 
+        // Delay pequeño para asegurar render y no bloquear
+        const timer = setTimeout(autoAssign, 500);
+        return () => { clearTimeout(timer); isMounted = false; };
+    }
+  }, [emptyLocationCodes, items]); // Dependencia en items para reinicio, emptyLocationCodes para disponibilidad
+
   // Mantener resumen de destino conforme se edita por ítem
   useEffect(() => {
     try {
@@ -833,6 +1000,8 @@ function PutawayTaskModal({
   }
 
   const handleCreate = async () => {
+    if (isCreating) return;
+    setIsCreating(true);
     try {
       const itemsToSend = (editableItems || []).filter(it => Number(it.quantity || 0) > 0);
       if (itemsToSend.length === 0) {
@@ -869,12 +1038,9 @@ function PutawayTaskModal({
             const j = await resp.json();
             serverMsg = j?.error || '';
           } catch {}
-          console.warn('Fallo creando en backend, guardando localmente. Detalle:', serverMsg || `HTTP ${resp.status}`);
-          const raw = localStorage.getItem('picking_tasks');
-          const tasks = raw ? JSON.parse(raw) : [];
-          localStorage.setItem('picking_tasks', JSON.stringify([newTask, ...tasks]));
-          window.dispatchEvent(new Event('picking_tasks_updated'));
-          alert(`Tarea de acomodo guardada localmente. Backend dijo: ${serverMsg || 'Error interno'}`);
+          console.error('Error creando tarea en backend:', serverMsg || `HTTP ${resp.status}`);
+          alert(`Error al crear la tarea: ${serverMsg || 'Error desconocido'}`);
+          // NO guardar localmente si falla el backend
         } else {
           // Si el backend creó la tarea, intenta sincronizar ID y guardar también en local
           try {
@@ -882,12 +1048,7 @@ function PutawayTaskModal({
             const saved = j?.task || j;
             if (saved?.id) newTask.id = saved.id;
           } catch {}
-          try {
-            const raw = localStorage.getItem('picking_tasks');
-            const tasks = raw ? JSON.parse(raw) : [];
-            localStorage.setItem('picking_tasks', JSON.stringify([newTask, ...tasks]));
-            window.dispatchEvent(new Event('picking_tasks_updated'));
-          } catch {}
+          // No guardamos en local si se creó en backend para evitar duplicados
           alert('Tarea de acomodo creada en la base de datos');
         }
       } else {
@@ -905,6 +1066,8 @@ function PutawayTaskModal({
       console.error('Error creando tarea de acomodo (modal):', e);
       alert('No se pudo crear la tarea');
       return undefined;
+    } finally {
+      setIsCreating(false);
     }
   };
 
@@ -1028,7 +1191,9 @@ function PutawayTaskModal({
 
         <div className="flex justify-end space-x-3 mt-6">
           <button onClick={onClose} className="px-4 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">Cancelar</button>
-          <button onClick={async () => { const t = await handleCreate(); onCreated && onCreated(t); }} className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700">Crear tarea de acomodo</button>
+          <button onClick={handleCreate} disabled={isCreating} className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm font-medium hover:bg-blue-700 disabled:bg-blue-300">
+            {isCreating ? 'Creando...' : 'Crear tarea de acomodo'}
+          </button>
         </div>
       </div>
     </div>

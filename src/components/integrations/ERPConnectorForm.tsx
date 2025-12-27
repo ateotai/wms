@@ -12,7 +12,7 @@ import {
   ArrowLeft
 } from 'lucide-react';
 
-const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || 'http://localhost:8082';
+const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || '';
 
 interface ERPConnectorFormData {
   name: string;
@@ -35,7 +35,8 @@ interface ERPConnectorFormData {
     retryAttempts: number;
     batchSize: number;
     direction?: 'entrada' | 'salida';
-    supportedTargets?: Array<'products' | 'purchase_orders' | 'sales_orders' | 'transfers'>;
+    supportedTargets?: Array<'products' | 'purchase_orders' | 'sales_orders' | 'transfers' | 'inventory'>;
+    allowProducts?: boolean;
   };
   isActive: boolean;
 }
@@ -49,7 +50,7 @@ interface ERPConnectorFormProps {
 export function ERPConnectorForm({ onClose, onSave, initialData }: ERPConnectorFormProps) {
   const [formData, setFormData] = useState<ERPConnectorFormData>({
     name: initialData?.name || '',
-    type: initialData?.type || 'SAP B1',
+    type: initialData?.type || 'Custom',
     endpoint: initialData?.endpoint || '',
     username: initialData?.username || '',
     password: initialData?.password || '',
@@ -68,7 +69,8 @@ export function ERPConnectorForm({ onClose, onSave, initialData }: ERPConnectorF
       retryAttempts: initialData?.connectionSettings?.retryAttempts || 3,
       batchSize: initialData?.connectionSettings?.batchSize || 100,
       direction: initialData?.connectionSettings?.direction as ('entrada' | 'salida') || 'entrada',
-      supportedTargets: (initialData?.connectionSettings?.supportedTargets as Array<'products' | 'purchase_orders' | 'sales_orders' | 'transfers'>) || ['products', 'purchase_orders']
+      supportedTargets: (initialData?.connectionSettings?.supportedTargets as Array<'products' | 'purchase_orders' | 'sales_orders' | 'transfers' | 'inventory'>) || [],
+      allowProducts: initialData?.connectionSettings?.allowProducts === true
     },
     isActive: initialData?.isActive ?? true
   });
@@ -130,8 +132,12 @@ export function ERPConnectorForm({ onClose, onSave, initialData }: ERPConnectorF
       newErrors.endpoint = 'El endpoint debe ser una URL válida';
     }
 
-    if (!formData.username.trim() && !formData.apiKey.trim()) {
-      newErrors.auth = 'Se requiere usuario/contraseña o API Key';
+    // En edición, permitir guardar aunque usuario/API Key no se modifiquen
+    const isEditing = !!initialData;
+    if (!isEditing) {
+      if (!formData.username.trim() && !formData.apiKey.trim()) {
+        newErrors.auth = 'Se requiere usuario/contraseña o API Key';
+      }
     }
 
     if (formData.syncInterval < 1) {
@@ -466,19 +472,31 @@ export function ERPConnectorForm({ onClose, onSave, initialData }: ERPConnectorF
             </h3>
             
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Tipo de Sincronización
-                </label>
-                <select
-                  value={formData.syncType}
-                  onChange={(e) => handleInputChange('syncType', e.target.value as 'manual' | 'automatic')}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                >
-                  <option value="automatic">Automática</option>
-                  <option value="manual">Manual</option>
-                </select>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Tipo de Sincronización
+              </label>
+              <select
+                value={formData.syncType}
+                onChange={(e) => handleInputChange('syncType', e.target.value as 'manual' | 'automatic')}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="automatic">Automática</option>
+                <option value="manual">Manual</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Permitir catálogo de productos</label>
+              <div className="flex items-center h-10">
+                <input
+                  type="checkbox"
+                  checked={Boolean((formData.connectionSettings as any).allowProducts)}
+                  onChange={(e) => handleNestedInputChange('connectionSettings', 'allowProducts', e.target.checked)}
+                  className="w-5 h-5"
+                />
+                <span className="ml-2 text-sm text-gray-700">Habilitar sincronización de productos</span>
               </div>
+            </div>
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -536,6 +554,7 @@ export function ERPConnectorForm({ onClose, onSave, initialData }: ERPConnectorF
                 <div className="flex flex-wrap gap-3">
                   {[
                     { key: 'products', label: 'Productos' },
+                    { key: 'inventory', label: 'Inventario' },
                     { key: 'purchase_orders', label: 'Órdenes de Compra' },
                     { key: 'sales_orders', label: 'Pedidos' },
                     { key: 'transfers', label: 'Traspasos' },

@@ -77,6 +77,30 @@ export function CustomReports() {
       { id: 'total_amount', name: 'Monto Total', type: 'currency' },
       { id: 'items_count', name: 'Cantidad Items', type: 'number' },
       { id: 'shipping_method', name: 'Método Envío', type: 'text' }
+    ],
+    shipments: [
+      { id: 'shipment_id', name: 'ID Envío', type: 'text' },
+      { id: 'carrier', name: 'Transportista', type: 'text' },
+      { id: 'ship_date', name: 'Fecha Envío', type: 'date' },
+      { id: 'status', name: 'Estado', type: 'text' }
+    ],
+    operations: [
+      { id: 'operation_type', name: 'Tipo Operación', type: 'text' },
+      { id: 'orders_processed', name: 'Órdenes Procesadas', type: 'number' },
+      { id: 'avg_time', name: 'Tiempo Promedio', type: 'number' },
+      { id: 'accuracy', name: 'Precisión', type: 'number' }
+    ],
+    financial: [
+      { id: 'revenue', name: 'Ingresos', type: 'currency' },
+      { id: 'costs', name: 'Costos', type: 'currency' },
+      { id: 'margin', name: 'Margen', type: 'number' },
+      { id: 'roi', name: 'ROI', type: 'number' }
+    ],
+    customers: [
+      { id: 'customer_id', name: 'ID Cliente', type: 'text' },
+      { id: 'name', name: 'Nombre', type: 'text' },
+      { id: 'segment', name: 'Segmento', type: 'text' },
+      { id: 'orders', name: 'Órdenes', type: 'number' }
     ]
   };
 
@@ -407,7 +431,7 @@ export function CustomReports() {
                     </select>
                     <select
                       value={filter.operator}
-                      onChange={(e) => handleFilterChange(filter.id, 'operator', e.target.value)}
+                      onChange={(e) => handleFilterChange(filter.id, 'operator', e.target.value as FilterOperator)}
                       className="px-2 py-1 border border-gray-300 rounded text-sm"
                     >
                       <option value="equals">Igual a</option>
@@ -495,7 +519,7 @@ export function CustomReports() {
                   </label>
                   <select
                     value={sortOrder}
-                    onChange={(e) => setSortOrder(e.target.value)}
+                    onChange={(e) => setSortOrder(e.target.value as 'asc' | 'desc')}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   >
                     <option value="asc">Ascendente</option>

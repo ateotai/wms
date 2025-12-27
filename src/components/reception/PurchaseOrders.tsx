@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { 
   FileText, 
   Eye, 
@@ -7,10 +7,8 @@ import {
   Clock, 
   AlertTriangle,
   X,
-  Plus,
   Search,
-  Filter,
-  Bell
+  Filter
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useAuth } from '../../contexts/AuthContext';
@@ -19,7 +17,6 @@ const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
 
 // Moneda desde configuración
 type Currency = 'MXN' | 'USD' | 'EUR';
-const getCurrencySymbol = (c: Currency) => ({ MXN: '$', USD: '$', EUR: '€' }[c]);
 const getCurrencyLocale = (c: Currency) => ({ MXN: 'es-MX', USD: 'en-US', EUR: 'es-ES' }[c]);
 const getCurrencyCode = (c: Currency) => ({ MXN: 'MXN', USD: 'USD', EUR: 'EUR' }[c]);
 
@@ -92,8 +89,7 @@ export const PurchaseOrders: React.FC = () => {
   const [warehouses, setWarehouses] = useState<WarehouseOption[]>([]);
 
   // Notificaciones Push
-  const [notificationsSupported, setNotificationsSupported] = useState(false);
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
+  const [, setNotificationsEnabled] = useState(false);
   const [notificationError, setNotificationError] = useState<string | null>(null);
   // Resaltado temporal tras sincronización
   const [highlightCount, setHighlightCount] = useState<number>(0);
@@ -104,7 +100,7 @@ export const PurchaseOrders: React.FC = () => {
   const [editingStatusId, setEditingStatusId] = useState<string | null>(null);
   const [editingStatusValue, setEditingStatusValue] = useState<string>('pending');
   const ORDER_STATUS_OPTIONS = ['pending','partial','received','cancelled','draft','sent','confirmed'];
-  const filteredOrders = React.useMemo(() => {
+  const filteredOrders = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
     return orders.filter((o) =>
       (statusFilter === 'all' || String(o.status || '').toLowerCase() === statusFilter) &&
@@ -116,7 +112,6 @@ export const PurchaseOrders: React.FC = () => {
 
   useEffect(() => {
     const supported = 'Notification' in window;
-    setNotificationsSupported(supported);
     if (!supported) return;
     if (Notification.permission === 'granted') {
       setNotificationsEnabled(true);
@@ -217,25 +212,7 @@ export const PurchaseOrders: React.FC = () => {
     }
   };
 
-  const requestNotificationPermission = async () => {
-    try {
-      setNotificationError(null);
-      if (!notificationsSupported) {
-        setNotificationError('Las notificaciones no son soportadas por este navegador.');
-        return;
-      }
-      const permission = await Notification.requestPermission();
-      const granted = permission === 'granted';
-      setNotificationsEnabled(granted);
-      if (granted) {
-        subscribePush();
-      } else {
-        setNotificationError('Permiso de notificaciones denegado.');
-      }
-    } catch {
-      setNotificationError('No se pudo solicitar permiso de notificaciones.');
-    }
-  };
+  
 
   const isValidUUID = (v: string): boolean => {
     return /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$/.test(v.trim());
@@ -588,6 +565,8 @@ export const PurchaseOrders: React.FC = () => {
 
 
 
+  const SelectedStatusIcon = selectedOrder ? getStatusIcon(selectedOrder.status) : null;
+
   return (
     <div className="space-y-6">
       {/* Action Bar */}
@@ -868,7 +847,7 @@ export const PurchaseOrders: React.FC = () => {
               <div>
                 <h4 className="text-sm font-medium text-gray-900 mb-2">Estado</h4>
                 <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(selectedOrder.status)}`}>
-                  {React.createElement(getStatusIcon(selectedOrder.status), { className: "w-3 h-3 mr-1" })}
+                  {SelectedStatusIcon && <SelectedStatusIcon className="w-3 h-3 mr-1" />}
                   {getStatusText(selectedOrder.status)}
                 </span>
                 {selectedOrder.notes && (

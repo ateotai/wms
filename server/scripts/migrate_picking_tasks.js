@@ -9,6 +9,9 @@
  *
  * Nota: Supabase PostgREST no permite DDL; este script usa conexión directa a Postgres.
  */
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
+require('dotenv').config({ path: path.resolve(__dirname, '../../.env') });
 const { Client } = require('pg');
 
 async function migrate() {

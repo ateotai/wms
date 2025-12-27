@@ -79,7 +79,7 @@ export function BatchPicking() {
   const [labelBatch, setLabelBatch] = useState<Batch | null>(null);
 
   useEffect(() => {
-const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
     const buildQuery = () => {
       const qs: string[] = [];
       if (filterStatus !== 'all') qs.push(`status=${filterStatus}`);
@@ -129,7 +129,7 @@ const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.e
 
   // Suscripción SSE para refrescar en tiempo real
   useEffect(() => {
-const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
     const es = new EventSource(`${AUTH_BACKEND_URL}/picking/batches/stream`);
     es.onmessage = () => setRefreshToken((t) => t + 1);
     es.onerror = () => {
@@ -195,7 +195,7 @@ const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.e
   };
 
   const handleStartBatch = async (batchId: string) => {
-const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
     try {
       const resp = await fetch(`${AUTH_BACKEND_URL}/picking/batches/${batchId}/start`, { 
         method: 'POST',
@@ -209,7 +209,7 @@ const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.e
   };
 
   const handleCompleteBatch = async (batchId: string) => {
-const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
     try {
       const resp = await fetch(`${AUTH_BACKEND_URL}/picking/batches/${batchId}/complete`, { 
         method: 'POST',
@@ -240,7 +240,7 @@ const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.e
   // Cargar órdenes disponibles cuando se abre el modal
   useEffect(() => {
     if (!showCreateForm) return;
-const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
     const loadOrders = async () => {
       try {
         const resp = await fetch(`${AUTH_BACKEND_URL}/picking/tasks?status=pending`, {
@@ -271,7 +271,7 @@ const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.e
   // Cargar ítems del lote cuando se abre el modal de detalles
   useEffect(() => {
     if (!showDetails || !selectedBatch) return;
-const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
     let mounted = true;
     const loadItems = async () => {
       try {

@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
-import { RotateCcw, MapPin, Package, AlertTriangle, CheckCircle, XCircle, Play, Filter, Search, RefreshCw } from 'lucide-react';
+import { RotateCcw, MapPin, Package, AlertTriangle, CheckCircle, Play, Search, RefreshCw } from 'lucide-react';
 
 const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
 
@@ -30,7 +30,7 @@ export function ReplenishmentTasks({ searchTerm = '' }: ReplenishmentTasksProps)
   const [error, setError] = useState<string | null>(null);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [warehouseId, setWarehouseId] = useState<string>('');
+  const warehouseId = '';
   const [zoneFilter, setZoneFilter] = useState<string>('');
 
   const filteredSuggestions = useMemo(() => {
@@ -85,7 +85,7 @@ export function ReplenishmentTasks({ searchTerm = '' }: ReplenishmentTasksProps)
 
       const result: Suggestion[] = [];
 
-      for (const [wId, rows] of Object.entries(byWh)) {
+      for (const [, rows] of Object.entries(byWh)) {
         const pickRows = rows.filter(r => {
           const lt = String(r?.locations?.location_type || '').toUpperCase();
           const zone = String(r?.locations?.zone || '');

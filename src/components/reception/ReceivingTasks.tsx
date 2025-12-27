@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { getSortComparator } from '../../config/sorting';
 import { 
   Package, 
@@ -43,10 +43,11 @@ interface ReceivingTask {
   qualityIssues?: string[];
 }
 
-export const ReceivingTasks: React.FC = () => {
+export function ReceivingTasks() {
   const [selectedTask, setSelectedTask] = useState<ReceivingTask | null>(null);
   const [showTaskModal, setShowTaskModal] = useState(false);
   const [showNewTaskModal, setShowNewTaskModal] = useState(false);
+  const [, setShowQualityModal] = useState(false);
 
   // Carga inicial desde localStorage o datos mock
   const initialTasks: ReceivingTask[] = [
@@ -267,6 +268,8 @@ export const ReceivingTasks: React.FC = () => {
     return totalExpected > 0 ? Math.round((totalReceived / totalExpected) * 100) : 0;
   };
 
+  const ModalStatusIcon = selectedTask ? getStatusIcon(selectedTask.status) : null;
+
   return (
     <div className="space-y-6">
       {/* Action Bar */}
@@ -448,7 +451,7 @@ export const ReceivingTasks: React.FC = () => {
                   <div>
                     <span className="font-medium">Estado:</span>
                     <span className={`ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusColor(selectedTask.status)}`}>
-                      {React.createElement(getStatusIcon(selectedTask.status), { className: "w-3 h-3 mr-1" })}
+                      {ModalStatusIcon && <ModalStatusIcon className="w-3 h-3 mr-1" />}
                       {getStatusText(selectedTask.status)}
                     </span>
                   </div>
@@ -574,7 +577,7 @@ export const ReceivingTasks: React.FC = () => {
       )}
     </div>
   );
-};
+}
 
 // Formulario sencillo para crear tareas
 function NewTaskForm({ onCancel, onCreate }: { onCancel: () => void; onCreate: (data: {

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo, Fragment } from 'react';
 import { Calendar, Plus, X, CheckCircle, ChevronRight, ChevronDown } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -23,7 +23,7 @@ type BackendPurchaseOrder = {
   total_amount?: number;
 };
 
-export const Appointments: React.FC = () => {
+export function Appointments() {
   const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
   const { hasPermissionId } = useAuth();
   const [appointments, setAppointments] = useState<BackendAppointment[]>([]);
@@ -31,7 +31,7 @@ export const Appointments: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<string>('all');
   const [appointmentSearchTerm, setAppointmentSearchTerm] = useState<string>('');
-  const filteredAppointments = React.useMemo(() => {
+  const filteredAppointments = useMemo(() => {
     const term = appointmentSearchTerm.trim().toLowerCase();
     return appointments.filter(a =>
       (appointmentStatusFilter === 'all' || String(a.status || '').toLowerCase() === appointmentStatusFilter) &&
@@ -68,7 +68,7 @@ export const Appointments: React.FC = () => {
   // Recepción deshabilitada desde gestión de citas. La lógica y modal fueron removidos.
 
   const ACTIVE_APPOINTMENT_STATUSES = new Set(['scheduled','arrived','receiving','validated']);
-  const ordersInActiveAppointments = React.useMemo(() => {
+  const ordersInActiveAppointments = useMemo(() => {
     const ids = new Set<string>();
     for (const a of appointments) {
       const st = String(a?.status || '').toLowerCase();
@@ -98,8 +98,9 @@ export const Appointments: React.FC = () => {
       }
       const json = await resp.json();
       setAppointments(json.appointments || []);
-    } catch (e: any) {
-      setError(e?.message || 'Error cargando citas');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Error cargando citas';
+      setError(msg);
     } finally {
       setLoading(false);
     }
@@ -163,8 +164,9 @@ export const Appointments: React.FC = () => {
         throw new Error(txt || 'Error eliminando cita');
       }
       await loadAppointments();
-    } catch (e: any) {
-      alert(e?.message || 'No se pudo eliminar la cita');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'No se pudo eliminar la cita';
+      alert(msg);
     }
   };
 
@@ -174,7 +176,14 @@ export const Appointments: React.FC = () => {
       setEditSubmitting(true);
       setEditError(null);
       const token = localStorage.getItem('app_token');
-      const payload: any = {
+      type UpdateAppointmentPayload = {
+        scheduled_at?: string;
+        dock: string | null;
+        carrier: string | null;
+        notes: string | null;
+        status: string;
+      };
+      const payload: UpdateAppointmentPayload = {
         scheduled_at: editScheduledAt ? new Date(editScheduledAt).toISOString() : undefined,
         dock: editDock || null,
         carrier: editCarrier || null,
@@ -193,8 +202,9 @@ export const Appointments: React.FC = () => {
       setEditOpen(false);
       setEditId('');
       await loadAppointments();
-    } catch (e: any) {
-      setEditError(e?.message || 'No se pudo actualizar la cita');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'No se pudo actualizar la cita';
+      setEditError(msg);
     } finally {
       setEditSubmitting(false);
     }
@@ -234,8 +244,9 @@ export const Appointments: React.FC = () => {
       setCarrier('');
       setNotes('');
       await loadAppointments();
-    } catch (e: any) {
-      setError(e?.message || 'Error creando cita');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Error creando cita';
+      setError(msg);
     }
   };
 
@@ -307,7 +318,7 @@ export const Appointments: React.FC = () => {
             ) : (
               filteredAppointments.map((a) => {
                 return (
-                  <React.Fragment key={String(a.id)}>
+                  <Fragment key={String(a.id)}>
                     <tr>
                       <td className="px-4 py-2">
                         <div className="flex items-center gap-2">
@@ -381,7 +392,7 @@ export const Appointments: React.FC = () => {
                         </td>
                       </tr>
                     )}
-                  </React.Fragment>
+                  </Fragment>
                 );
               })
             )}
@@ -582,4 +593,4 @@ export const Appointments: React.FC = () => {
       {/* Modal de recepción eliminado: recepción se gestiona en Control de Recepción */}
     </div>
   );
-};
+}

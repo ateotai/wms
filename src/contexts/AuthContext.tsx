@@ -32,7 +32,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [token, setToken] = useState<string | null>(null);
 
   const LOCAL_USER_KEY = 'local_user';
-  const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+  const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
 
   // Helper: normalize permissions (fallback to role defaults when empty)
   const normalizePermissions = (
@@ -50,12 +50,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           try {
             const { initializeLocalUsers } = await import('../utils/localAuth');
             initializeLocalUsers();
-          } catch {}
+          } catch { void 0; }
         }
         const raw = localStorage.getItem(LOCAL_USER_KEY);
         if (raw) {
           const parsed: AuthUser = JSON.parse(raw);
-          const perms = normalizePermissions(parsed.role, parsed.permissions as any);
+          const perms = normalizePermissions(parsed.role, parsed.permissions);
           setUser({ ...parsed, permissions: perms });
         }
         const t = localStorage.getItem('app_token');
@@ -147,7 +147,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             headers: { 'Content-Type': 'application/json' },
             // Crear usuario de desarrollo con rol configurable (por defecto ADMIN)
             body: JSON.stringify({ email, password, full_name: 'Dev User', role: devRole }),
-          }).catch(() => {});
+          }).catch(() => { void 0; });
           resp = await fetch(`${AUTH_BACKEND_URL}/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -167,7 +167,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 Authorization: `Bearer ${tk}`,
               },
               body: JSON.stringify({ role: devRole }),
-            }).catch(() => {});
+            }).catch(() => { void 0; });
             // Refrescar el perfil tras actualizar rol
             const meResp = await fetch(`${AUTH_BACKEND_URL}/me`, { headers: { Authorization: `Bearer ${tk}` } });
             if (meResp.ok) {
@@ -178,7 +178,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               apiUser.role = devRole;
             }
           }
-        } catch {}
+        } catch { void 0; }
         const mapped: AuthUser = {
           id: apiUser.id,
           email: apiUser.email || email,
@@ -192,9 +192,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         localStorage.setItem(LOCAL_USER_KEY, JSON.stringify(mapped));
         localStorage.setItem('app_token', tk);
         setToken(tk);
-      } catch {
-        // noop
-      }
+      } catch { void 0; }
     };
     bootstrapDevUser();
   }, [AUTH_BACKEND_URL]);
@@ -212,7 +210,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           email: result.user.email,
           full_name: result.user.full_name || '',
           role: (result.user.role as UserRole) || UserRole.OPERATOR,
-          permissions: normalizePermissions((result.user.role as UserRole) || UserRole.OPERATOR, result.user.permissions as any),
+          permissions: normalizePermissions((result.user.role as UserRole) || UserRole.OPERATOR, Array.isArray((result.user as unknown as { permissions?: unknown }).permissions) ? ((result.user as unknown as { permissions?: Array<{ resource: string; action: string; allowed?: boolean } | string> }).permissions) : []),
           is_active: result.user.is_active ?? true,
           last_login: result.user.last_login,
         };

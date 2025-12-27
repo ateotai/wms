@@ -16,7 +16,7 @@ SET search_path = public;
 -- Tabla principal: picking_batches
 -- =====================================================
 CREATE TABLE IF NOT EXISTS picking_batches (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     name TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','in_progress','completed')),
     assigned_to TEXT,
@@ -39,7 +39,7 @@ CREATE INDEX IF NOT EXISTS idx_picking_batches_created_at ON picking_batches(cre
 -- Relación lote-órdenes: picking_batch_orders
 -- =====================================================
 CREATE TABLE IF NOT EXISTS picking_batch_orders (
-    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
     batch_id UUID REFERENCES picking_batches(id) ON DELETE CASCADE,
     sales_order_id UUID REFERENCES sales_orders(id) ON DELETE CASCADE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -72,7 +72,7 @@ END $$;
 -- Ítems agregados por lote: picking_batch_items
 -- =====================================================
 CREATE TABLE IF NOT EXISTS picking_batch_items (
-  id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   batch_id UUID REFERENCES picking_batches(id) ON DELETE CASCADE,
   product_id UUID REFERENCES products(id),
   sku TEXT,

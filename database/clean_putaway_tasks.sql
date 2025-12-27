@@ -1,0 +1,1 @@
+DELETE FROM public.picking_tasks WHERE customer = 'Acomodo';

@@ -28,6 +28,7 @@ interface BackendMovement {
   performed_by?: string;
   locations?: { code?: string };
   products?: { sku?: string; name?: string };
+  transaction_type?: string;
 }
 
 interface StockMovementUI {
@@ -36,6 +37,7 @@ interface StockMovementUI {
   sku: string;
   productName: string;
   type: UiMovementType;
+  transactionType?: string;
   quantity: number;
   fromLocation?: string;
   toLocation?: string;
@@ -49,7 +51,8 @@ interface StockMovementUI {
   batchNumber?: string;
 }
 
-const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
+
 
 // Opciones de selección basadas en tablas existentes
 type WarehouseOption = { id: string; name: string; code: string; is_active: boolean };
@@ -315,6 +318,7 @@ export function StockMovements(
           sku: m.products?.sku || '',
           productName: m.products?.name || 'Producto',
           type,
+          transactionType: m.transaction_type,
           quantity: qty,
           fromLocation: undefined,
           toLocation: m.locations?.code || undefined,
@@ -493,7 +497,8 @@ export function StockMovements(
     }
   };
 
-  const getMovementTypeLabel = (type: UiMovementType) => {
+  const getMovementTypeLabel = (type: UiMovementType, transactionType?: string) => {
+    if (transactionType === 'RECEIPT') return 'Recibida';
     switch (type) {
       case 'IN':
         return 'Entrada';
@@ -747,6 +752,22 @@ export function StockMovements(
             .eq('products.is_active', true);
           if (warehouseId) query = query.eq('warehouse_id', warehouseId);
 
+          const resolvedProductId = await resolveProductId(raw);
+          if (resolvedProductId) {
+            query = query.eq('product_id', resolvedProductId);
+          } else {
+            const { data: prodMatches } = await supabase
+              .from('products')
+              .select('id, sku')
+              .ilike('sku', `%${productSku}%`)
+              .eq('is_active', true)
+              .limit(50);
+            const ids = (prodMatches || []).map((p: any) => p.id);
+            if (ids.length === 0) {
+              throw new Error('no-product-matches');
+            }
+            query = query.in('product_id', ids as any);
+          }
           if (productId) {
             query = query.eq('product_id', productId);
           } else {
@@ -892,7 +913,7 @@ export function StockMovements(
                   <tr key={movement.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3">
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getMovementColor(movement.type)}`}>
-                        {getMovementTypeLabel(movement.type)}
+                        {getMovementTypeLabel(movement.type, movement.transactionType)}
                       </span>
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-700">#{movement.reference}</td>

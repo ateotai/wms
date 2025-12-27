@@ -193,52 +193,26 @@ export function PackingTasks() {
     try {
       const existingStr = localStorage.getItem('packing_tasks');
       const existing: PackingTask[] = existingStr ? JSON.parse(existingStr) : [];
-      let merged: PackingTask[] = Array.isArray(existing) ? existing : [];
-      const pkgStr = localStorage.getItem('packing_packages');
-      const pkgs = pkgStr ? JSON.parse(pkgStr) : [];
-      const seen = new Set<string>(merged.map(t => String(t.taskNumber || t.id)));
-      const listPkgs: Array<any> = Array.isArray(pkgs) ? pkgs : [];
-      for (const p of listPkgs) {
-        const key = String(p.packageId || '');
-        if (!key || seen.has(key)) continue;
-        const statusMap: any = (p.status === 'in_process' ? 'in_progress' : p.status);
-        const items: PackingItem[] = (p.items || []).map((it: any, idx: number) => ({
-          id: `pkg-${key}-${idx}`,
-          product: String(it.product || ''),
-          sku: String(it.sku || ''),
-          quantity: Number(it.quantity || 0),
-          quantityPacked: statusMap === 'completed' ? Number(it.quantity || 0) : 0,
-          weight: Number(it.weight || 0),
-          dimensions: String(it.dimensions || ''),
-          location: '',
-          barcode: String(it.sku || ''),
-          fragile: false,
-        }));
-        const t: PackingTask = {
-          id: key,
-          taskNumber: key,
-          orderId: key,
-          orderNumber: String(p.orderNumber || ''),
-          assignedTo: String(p.operator || ''),
-          status: statusMap,
-          priority: 'medium',
-          items,
-          packingType: 'standard',
-          estimatedTime: 10,
-          packingMaterials: ['Caja', 'Cinta'],
-          boxType: 'Caja estándar',
-          totalWeight: items.reduce((s, it) => s + (it.weight || 0) * (it.quantity || 0), 0),
-          totalVolume: 0,
-          createdAt: String(p.createdAt || new Date().toISOString()),
-          notes: undefined,
-          qualityCheck: false,
-        };
-        merged = [t, ...merged];
-        seen.add(key);
+      
+      // Cleanup: Remove old tasks (before Dec 2025) and duplicates (PKG-)
+      const cutoff = new Date('2025-12-01').getTime();
+      const cleaned = (Array.isArray(existing) ? existing : []).filter(t => {
+        // Remove PKG- duplicates
+        if (String(t.id).startsWith('PKG-')) return false;
+        
+        // Remove old completed tasks
+        if (['completed', 'embarked', 'shipped'].includes(t.status)) {
+           return new Date(t.createdAt).getTime() > cutoff;
+        }
+        return true;
+      });
+      
+      if (cleaned.length !== existing.length) {
+         try { localStorage.setItem('packing_tasks', JSON.stringify(cleaned)); } catch {}
       }
-      setTasks(merged);
-      try { localStorage.setItem('packing_tasks', JSON.stringify(merged)); } catch {}
+      setTasks(cleaned);
     } catch {}
+    
     const handlerTask = (e: any) => {
       const task = e?.detail?.task;
       if (task) {
@@ -419,6 +393,56 @@ export function PackingTasks() {
       localStorage.setItem('packing_tasks', JSON.stringify(newList));
     } catch {}
     try { await supabase.from('packing_orders').update({ status: 'embarked' }).eq('packing_id', embarked.taskNumber); } catch {}
+
+    // Generar movimientos de salida (OUT) en inventario
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      // Buscar almacén por defecto (usamos el primero activo)
+      const { data: warehouses } = await supabase.from('warehouses').select('id').limit(1);
+      const warehouseId = warehouses?.[0]?.id;
+
+      if (warehouseId) {
+        // Obtener IDs de productos basados en SKU
+        const skus = embarked.items.map(it => it.sku).filter(Boolean);
+        if (skus.length > 0) {
+          const { data: products } = await supabase
+            .from('products')
+            .select('id, sku')
+            .in('sku', skus);
+          
+          const productMap = new Map();
+          (products || []).forEach((p: any) => {
+             if (p.sku) productMap.set(p.sku, p.id);
+          });
+
+          const movements = embarked.items.map(it => {
+             const pid = productMap.get(it.sku);
+             if (!pid) return null;
+             // Usar cantidad empacada si existe, sino la total
+             const qty = (it.quantityPacked && it.quantityPacked > 0) ? it.quantityPacked : it.quantity;
+             return {
+               product_id: pid,
+               warehouse_id: warehouseId,
+               movement_type: 'OUT',
+               transaction_type: 'SHIPMENT',
+               quantity: qty,
+               reference_number: embarked.orderNumber || embarked.taskNumber,
+               reference_type: 'packing_task',
+               reason: 'Embarque de pedido',
+               notes: `Orden: ${embarked.orderNumber}, Tarea: ${embarked.taskNumber}`,
+               performed_by: user?.id, // Puede ser null si es anónimo
+               created_at: new Date().toISOString()
+             };
+          }).filter(Boolean);
+
+          if (movements.length > 0) {
+            await supabase.from('inventory_movements').insert(movements);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Error generando movimientos de salida:', e);
+    }
   };
 
   const getTaskProgress = (task: PackingTask) => {

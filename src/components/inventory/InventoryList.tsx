@@ -64,11 +64,39 @@ export function InventoryList({ searchTerm, filterCategory }: InventoryListProps
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [packingQtyBySku, setPackingQtyBySku] = useState<Record<string, { qty: number; status: string }>>({});
 
   const fetchInventoryData = async () => {
     try {
       setLoading(true);
       setError(null);
+
+      // Cargar tareas de empaquetado desde localStorage
+      try {
+        const tasksStr = localStorage.getItem('packing_tasks');
+        const tasks = tasksStr ? JSON.parse(tasksStr) : [];
+        const packingMap: Record<string, { qty: number; status: string }> = {};
+        if (Array.isArray(tasks)) {
+          tasks.forEach((t: any) => {
+            // Considerar tareas que no están canceladas
+            if (t.status !== 'cancelled' && t.items && Array.isArray(t.items)) {
+              t.items.forEach((it: any) => {
+                const sku = String(it.sku || '').trim().toUpperCase();
+                if (sku) {
+                  const current = packingMap[sku] || { qty: 0, status: 'packing' };
+                  packingMap[sku] = {
+                    qty: current.qty + Number(it.quantity || 0),
+                    status: (t.status === 'embarked' || t.status === 'shipped') ? 'embarked' : current.status
+                  };
+                }
+              });
+            }
+          });
+        }
+        setPackingQtyBySku(packingMap);
+      } catch (e) {
+        console.warn('Error leyendo tareas de empaquetado:', e);
+      }
 
       let transformedInventory: InventoryItem[] = [];
 
@@ -461,6 +489,9 @@ export function InventoryList({ searchTerm, filterCategory }: InventoryListProps
                   Estado
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Salidas
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Valor
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -508,6 +539,22 @@ export function InventoryList({ searchTerm, filterCategory }: InventoryListProps
                         {stockStatus.status === 'critical' && <AlertCircle className="w-3 h-3 mr-1" />}
                         {stockStatus.label}
                       </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      {(() => {
+                        const data = packingQtyBySku[String(item.sku || '').trim().toUpperCase()];
+                        if (data && data.qty > 0) {
+                          const isEmbarked = data.status === 'embarked' || data.status === 'shipped';
+                          return (
+                             <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                               isEmbarked ? 'bg-indigo-100 text-indigo-800' : 'bg-orange-100 text-orange-800'
+                             }`}>
+                               {isEmbarked ? 'Embarcado: ' : 'Empaquetado: '}{data.qty}
+                             </span>
+                          );
+                        }
+                        return <span className="text-gray-400 text-sm">—</span>;
+                      })()}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       {formatCurrency(item.totalValue)}

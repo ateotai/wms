@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { Plus, Settings, Trash2, RefreshCw, Database, CheckCircle, AlertCircle, Clock, WifiOff, Calendar, BarChart3 } from 'lucide-react';
-import { supabase } from '../../lib/supabase';
+import { useState, useEffect } from 'react';
+import { Plus, Eye, Pencil, Trash2, RefreshCw, Database, CheckCircle, AlertCircle, Clock, WifiOff, Calendar, BarChart3 } from 'lucide-react';
+// import { supabase } from '../../lib/supabase';
 import { ERPConnectorForm } from './ERPConnectorForm';
 
 interface ERPConnector {
@@ -15,7 +15,19 @@ interface ERPConnector {
   endpoint: string;
   version: string;
   direction?: 'entrada' | 'salida';
-  supportedTargets?: Array<'products' | 'purchase_orders' | 'sales_orders' | 'transfers'>;
+  supportedTargets?: Array<'products' | 'purchase_orders' | 'sales_orders' | 'transfers' | 'inventory'>;
+  username?: string;
+  password?: string;
+  apiKey?: string;
+  syncInterval?: number;
+  syncType?: 'manual' | 'automatic';
+  allowProducts?: boolean;
+  inventoryMapping?: {
+    productIdField?: string;
+    quantityField?: string;
+    locationField?: string;
+    priceField?: string;
+  };
 }
 
 export function ERPConnectors() {
@@ -26,6 +38,11 @@ export function ERPConnectors() {
   const [loading, setLoading] = useState(true);
   const [isEditing, setIsEditing] = useState(false);
   const [editingConnector, setEditingConnector] = useState<ERPConnector | null>(null);
+  const [showErrorsModal, setShowErrorsModal] = useState(false);
+  const [errorsLoading, setErrorsLoading] = useState(false);
+  const [errorLogs, setErrorLogs] = useState<any[]>([]);
+  const [errorsConnector, setErrorsConnector] = useState<ERPConnector | null>(null);
+  const [createMode, setCreateMode] = useState<'default' | 'outbound'>('default');
 
   // Cargar conectores desde la base de datos
   useEffect(() => {
@@ -35,18 +52,25 @@ export function ERPConnectors() {
   const loadConnectors = async () => {
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('erp_connectors')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        console.error('Error loading connectors:', error);
+      const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
+      if (!AUTH_BACKEND_URL) {
+        console.warn('[ERPConnectors] Backend no configurado, no se pueden cargar conectores');
+        setConnectors([]);
         return;
       }
-
-      // Transformar los datos de la base de datos al formato esperado
-      const transformedConnectors: ERPConnector[] = (data || []).map(connector => ({
+      const token = localStorage.getItem('app_token');
+      const resp = await fetch(`${AUTH_BACKEND_URL}/erp/connectors`, {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+      });
+      if (!resp.ok) {
+        const t = await resp.text();
+        throw new Error(t || 'Error cargando conectores');
+      }
+      const json = await resp.json();
+      const rows = Array.isArray(json?.connectors) ? json.connectors : [];
+      const transformedConnectors: ERPConnector[] = rows.map((connector: any) => ({
         id: connector.id,
         name: connector.name,
         type: connector.type,
@@ -57,10 +81,16 @@ export function ERPConnectors() {
         errorCount: connector.error_count || 0,
         endpoint: connector.endpoint,
         version: connector.version || '1.0',
-        direction: (connector.connection_settings || {}).direction || 'entrada',
-        supportedTargets: (connector.connection_settings || {}).supportedTargets || ['products', 'purchase_orders']
+        direction: (connector.connection_settings || {}).direction === 'outbound' ? 'salida' : 'entrada',
+        supportedTargets: (connector.connection_settings || {}).supportedTargets || [],
+        allowProducts: ((connector.connection_settings || {}).allowProducts === true),
+        username: connector.username || '',
+        password: connector.password || '',
+        apiKey: connector.api_key || '',
+        syncInterval: Number(connector.sync_interval || 0) || 0,
+        syncType: (connector.sync_type || 'automatic'),
+        inventoryMapping: connector.inventory_mapping || {}
       }));
-
       setConnectors(transformedConnectors);
     } catch (error) {
       console.error('Error loading connectors:', error);
@@ -69,57 +99,7 @@ export function ERPConnectors() {
     }
   };
 
-  // Crear conector en modo prueba (Pedidos y Traspasos) apuntando al backend mock
-  const handleCreateTestConnector = async () => {
-    try {
-const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || 'http://localhost:8082';
-      const endpointBase = `${apiBase}/mock/sap`;
-      const nowIso = new Date().toISOString();
-      const connectorData = {
-        name: 'sap-mock-test',
-        type: 'SAP B1',
-        endpoint: endpointBase,
-        username: 'demo',
-        api_key: 'demo',
-        version: 'v1',
-        sync_interval: 60,
-        sync_type: 'manual',
-        status: 'active',
-        last_sync: null,
-        next_sync: null,
-        records_processed: 0,
-        error_count: 0,
-        connection_settings: {
-          direction: 'salida',
-          supportedTargets: ['sales_orders', 'transfers']
-        },
-        inventory_mapping: {},
-        is_active: true,
-        created_at: nowIso
-      } as any;
-
-      const { data, error } = await supabase
-        .from('erp_connectors')
-        .insert([connectorData])
-        .select()
-        .single();
-      if (error) throw error;
-
-      await loadConnectors();
-
-      try {
-        await handleSync(data.id, 'sales_orders');
-        await handleSync(data.id, 'transfers');
-      } catch (e) {
-        console.warn('[ERPConnectors] Auto-sync test connector falló:', (e as any)?.message || e);
-      }
-
-      alert('Conector de prueba creado. Puedes sincronizar pedidos y traspasos.');
-    } catch (e: any) {
-      console.error('Error creando conector de prueba:', e);
-      alert(e?.message || 'No se pudo crear el conector de prueba');
-    }
-  };
+  
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -168,9 +148,9 @@ const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || 'http://localhost:8082'
 
   const handleSync = async (
     connectorId: string,
-    target: 'products' | 'purchase_orders' | 'sales_orders' | 'transfers' = 'products'
+    target: 'products' | 'purchase_orders' | 'sales_orders' | 'transfers' | 'inventory' = 'products'
   ) => {
-const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || 'http://localhost:8082';
+const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || '';
     setConnectors(prev => prev.map(conn => 
       conn.id === connectorId 
         ? { ...conn, status: 'syncing' as const }
@@ -222,42 +202,103 @@ const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || 'http://localhost:8082'
     setShowConnectorForm(true);
   };
 
+  const handleDeleteConnector = async (connectorId: string) => {
+    try {
+      const confirmed = window.confirm('¿Eliminar este conector ERP? Esta acción no se puede deshacer.');
+      if (!confirmed) return;
+      const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || '';
+      if (!apiBase) {
+        alert('Backend no configurado: defina VITE_AUTH_BACKEND_URL');
+        return;
+      }
+      const token = localStorage.getItem('app_token');
+      const resp = await fetch(`${apiBase}/erp/connectors/${connectorId}`, {
+        method: 'DELETE',
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+      });
+      if (!resp.ok) {
+        const t = await resp.text().catch(() => '');
+        throw new Error(t || 'No se pudo eliminar el conector');
+      }
+      await loadConnectors();
+      alert('Conector eliminado');
+    } catch (e: any) {
+      console.error('Error al eliminar conector:', e?.message || e);
+      alert(e?.message || 'No se pudo eliminar el conector');
+    }
+  };
+
+  const handleShowErrors = async (connector: ERPConnector) => {
+    try {
+      setErrorsConnector(connector);
+      setShowErrorsModal(true);
+      setErrorsLoading(true);
+      setErrorLogs([]);
+      const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || '';
+      if (!apiBase) throw new Error('Backend no configurado');
+      const token = localStorage.getItem('app_token');
+      const resp = await fetch(`${apiBase}/erp/connectors/${connector.id}/errors?limit=50`, {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        }
+      });
+      const data = await resp.json().catch(() => ({} as any));
+      if (!resp.ok) throw new Error(data?.error || 'Error leyendo errores');
+      const rows = Array.isArray(data?.errors) ? data.errors : [];
+      setErrorLogs(rows);
+    } catch (e: any) {
+      setErrorLogs([]);
+      alert(e?.message || 'No se pudieron cargar los errores');
+    } finally {
+      setErrorsLoading(false);
+    }
+  };
+
   const handleCreateConnector = async (formData: any) => {
     try {
-      // Preparar datos para la base de datos
-      const connectorData = {
+      const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
+      const payload = {
         name: formData.name,
-        type: formData.type,
+        type: formData.type === 'Custom' ? 'API Personalizada' : formData.type,
         endpoint: formData.endpoint,
         username: formData.username,
+        password: formData.password,
         api_key: formData.apiKey,
         version: formData.version || '1.0',
         sync_interval: formData.syncInterval || 60,
         sync_type: formData.syncType || 'manual',
         status: formData.isActive ? 'active' : 'inactive',
         last_sync: formData.isActive ? new Date().toISOString() : null,
-        next_sync: formData.isActive && formData.syncType === 'automatic' 
+        next_sync: formData.isActive && formData.syncType === 'automatic'
           ? new Date(Date.now() + (formData.syncInterval || 60) * 60000).toISOString()
           : null,
         records_processed: 0,
         error_count: 0,
-        connection_settings: formData.connectionSettings || {},
+        connection_settings: {
+          ...formData.connectionSettings,
+          direction: formData.connectionSettings.direction === 'salida' ? 'outbound' : 'inbound'
+        } || {},
         inventory_mapping: formData.inventoryMapping || {},
         is_active: formData.isActive || false
-      };
+      } as any;
 
-      // Insertar en la base de datos
-      const { data, error } = await supabase
-        .from('erp_connectors')
-        .insert([connectorData])
-        .select()
-        .single();
-
-      if (error) {
-        console.error('Error creating connector:', error);
-        alert('Error al crear el conector. Por favor, intenta de nuevo.');
-        return;
+      if (!AUTH_BACKEND_URL) throw new Error('Backend no configurado');
+      const token = localStorage.getItem('app_token');
+      const resp = await fetch(`${AUTH_BACKEND_URL}/erp/connectors`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify(payload)
+      });
+      if (!resp.ok) {
+        const t = await resp.text();
+        throw new Error(t || 'Error creando conector');
       }
+      await loadConnectors();
 
       // Recargar la lista de conectores
       await loadConnectors();
@@ -277,41 +318,40 @@ const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || 'http://localhost:8082'
       if (!editingConnector) return;
       const updates = {
         name: formData.name,
-        type: formData.type,
+        type: formData.type === 'Custom' ? 'API Personalizada' : formData.type,
         endpoint: formData.endpoint,
         username: formData.username,
+        password: formData.password,
         api_key: formData.apiKey,
         version: formData.version || '1.0',
         sync_interval: formData.syncInterval || 60,
         sync_type: formData.syncType || 'manual',
         status: formData.isActive ? 'active' : 'inactive',
-        connection_settings: formData.connectionSettings || {},
+        connection_settings: {
+          ...formData.connectionSettings,
+          direction: formData.connectionSettings.direction === 'salida' ? 'outbound' : 'inbound'
+        } || {},
         inventory_mapping: formData.inventoryMapping || {},
         is_active: formData.isActive || false,
         updated_at: new Date().toISOString()
       };
-
-      const { error } = await supabase
-        .from('erp_connectors')
-        .update(updates)
-        .eq('id', editingConnector.id);
-
-      if (error) {
-        console.error('Error updating connector:', error);
-        alert('Error al actualizar el conector. Por favor, intenta de nuevo.');
-        return;
+      const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
+      if (!AUTH_BACKEND_URL) throw new Error('Backend no configurado');
+      const token = localStorage.getItem('app_token');
+      const resp = await fetch(`${AUTH_BACKEND_URL}/erp/connectors/${editingConnector.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        body: JSON.stringify(updates)
+      });
+      if (!resp.ok) {
+        const t = await resp.text();
+        throw new Error(t || 'Error al actualizar el conector');
       }
 
       await loadConnectors();
-      try {
-        await handleSync(editingConnector.id, 'products');
-        await handleSync(editingConnector.id, 'purchase_orders');
-        // Extender actualización para generar pedidos de venta y traspasos ficticios
-        await handleSync(editingConnector.id, 'sales_orders');
-        await handleSync(editingConnector.id, 'transfers');
-      } catch (e) {
-        console.warn('[ERPConnectors] auto-sync tras actualización falló:', e?.message || e);
-      }
       setShowConnectorForm(false);
       setIsEditing(false);
       setEditingConnector(null);
@@ -332,20 +372,20 @@ const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || 'http://localhost:8082'
         </div>
         <div className="flex items-center gap-3">
           <button 
-            onClick={() => { setIsEditing(false); setEditingConnector(null); setShowConnectorForm(true); }}
+            onClick={() => { setIsEditing(false); setEditingConnector(null); setCreateMode('outbound'); setShowConnectorForm(true); }}
+            className="flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700"
+          >
+            <Plus className="w-4 h-4 mr-2" />
+            Nuevo Conector de Salida
+          </button>
+          <button 
+            onClick={() => { setIsEditing(false); setEditingConnector(null); setCreateMode('default'); setShowConnectorForm(true); }}
             className="flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
           >
             <Plus className="w-4 h-4 mr-2" />
             Nuevo Conector ERP
           </button>
-          <button
-            onClick={handleCreateTestConnector}
-            className="flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
-            title="Crear conector de prueba para Pedidos y Traspasos"
-          >
-            <RefreshCw className="w-4 h-4 mr-2" />
-            Conector Prueba (Pedidos/Traspasos)
-          </button>
+          
         </div>
       </div>
 
@@ -417,6 +457,7 @@ const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || 'http://localhost:8082'
                               {t === 'products' && 'Productos'}
                               {t === 'purchase_orders' && 'Órdenes'}
                               {t === 'sales_orders' && 'Pedidos'}
+                              {t === 'inventory' && 'Inventario'}
                               {t === 'transfers' && 'Traspasos'}
                             </span>
                           ))}
@@ -445,28 +486,26 @@ const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || 'http://localhost:8082'
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
-                      connector.errorCount > 0 ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'
-                    }`}>
+                    <button
+                      type="button"
+                      onClick={() => handleShowErrors(connector)}
+                      className={`inline-flex px-2 py-1 text-xs font-semibold rounded-full ${
+                        connector.errorCount > 0 ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'
+                      }`}
+                      title="Ver errores"
+                    >
                       {connector.errorCount} errores
-                    </span>
+                    </button>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-2">
 
-                    <button
-                      onClick={() => handleSync(connector.id, 'purchase_orders')}
-                      disabled={connector.status === 'syncing'}
-                      className={`inline-flex items-center px-3 py-1.5 border rounded-md text-sm ${connector.status === 'syncing' ? 'bg-gray-100 text-gray-500 border-gray-200 cursor-not-allowed' : 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50'}`}
-                      title="Sincronizar Órdenes de Compra"
-                    >
-                      <RefreshCw className={`w-4 h-4 mr-1 ${connector.status === 'syncing' ? 'animate-spin' : ''}`} />
-                      Órdenes
-                    </button>
+                    
                     <button
                       onClick={async () => {
-                        const targets = connector.supportedTargets && connector.supportedTargets.length > 0
-                          ? connector.supportedTargets
-                          : ['products', 'purchase_orders'];
+                        const targets: Array<'products' | 'purchase_orders' | 'sales_orders' | 'transfers' | 'inventory'> =
+                          connector.supportedTargets && connector.supportedTargets.length > 0
+                            ? (connector.supportedTargets as Array<'products' | 'purchase_orders' | 'sales_orders' | 'transfers' | 'inventory'>)
+                            : [];
                         for (const t of targets) {
                           await handleSync(connector.id, t);
                         }
@@ -480,11 +519,18 @@ const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || 'http://localhost:8082'
                     <button
                       onClick={() => handleViewDetails(connector)}
                       className="text-gray-600 hover:text-gray-900"
-                      title="Configurar"
+                      title="Ver"
                     >
-                      <Settings className="w-4 h-4" />
+                      <Eye className="w-4 h-4" />
                     </button>
-                    <button className="text-red-600 hover:text-red-900" title="Eliminar">
+                    <button
+                      onClick={() => handleEditConnector(connector)}
+                      className="text-gray-600 hover:text-gray-900"
+                      title="Editar"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => handleDeleteConnector(connector.id)} className="text-red-600 hover:text-red-900" title="Eliminar">
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </td>
@@ -562,7 +608,7 @@ const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || 'http://localhost:8082'
                   onClick={() => handleEditConnector(selectedConnector)}
                   className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
                 >
-                  Configurar
+                  Editar
                 </button>
               </div>
             </div>
@@ -571,22 +617,102 @@ const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || 'http://localhost:8082'
       )}
 
       {/* ERP Connector Form */}
-      {showConnectorForm && (
-        <ERPConnectorForm
-          onClose={() => { setShowConnectorForm(false); setIsEditing(false); setEditingConnector(null); }}
-          onSave={isEditing ? handleUpdateConnector : handleCreateConnector}
-          initialData={isEditing && editingConnector ? {
-            name: editingConnector.name,
-            type: editingConnector.type,
-            endpoint: editingConnector.endpoint,
-            version: editingConnector.version,
-            isActive: editingConnector.status === 'active',
-            connectionSettings: {
-              direction: editingConnector.direction || 'entrada',
-              supportedTargets: editingConnector.supportedTargets || ['products', 'purchase_orders']
-            }
-          } : undefined}
-        />
+              {showConnectorForm && (
+                <ERPConnectorForm
+                  onClose={() => { setShowConnectorForm(false); setIsEditing(false); setEditingConnector(null); }}
+                  onSave={isEditing ? handleUpdateConnector : handleCreateConnector}
+                  initialData={isEditing && editingConnector ? {
+                    name: editingConnector.name,
+                    type: editingConnector.type,
+                    endpoint: editingConnector.endpoint,
+                    username: editingConnector.username || '',
+                    password: editingConnector.password || '',
+                    apiKey: editingConnector.apiKey || '',
+                    version: editingConnector.version,
+                    syncInterval: editingConnector.syncInterval || 30,
+                    syncType: editingConnector.syncType || 'automatic',
+                    isActive: editingConnector.status === 'active',
+                    inventoryMapping: {
+                      productIdField: editingConnector.inventoryMapping?.productIdField || 'ItemCode',
+                      quantityField: editingConnector.inventoryMapping?.quantityField || 'OnHand',
+                      locationField: editingConnector.inventoryMapping?.locationField || 'WhsCode',
+                      priceField: editingConnector.inventoryMapping?.priceField || 'Price'
+                    },
+                    connectionSettings: {
+                      direction: editingConnector.direction || 'entrada',
+                      supportedTargets: editingConnector.supportedTargets || [],
+                      timeout: 30000,
+                      retryAttempts: 3,
+                      batchSize: 50,
+                      allowProducts: editingConnector.allowProducts === true
+                    } as any
+                  } : (createMode === 'outbound' ? {
+                    type: 'SAP B1',
+                    connectionSettings: {
+                      direction: 'salida',
+                      supportedTargets: ['purchase_orders'],
+                      timeout: 30000,
+                      retryAttempts: 3,
+                      batchSize: 50,
+                      allowProducts: false
+                    } as any
+                  } : undefined)}
+                />
+              )}
+
+      {showErrorsModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center p-6 border-b border-gray-200">
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Errores del conector</h3>
+                <p className="text-sm text-gray-600">{errorsConnector?.name} · {errorsConnector?.type}</p>
+              </div>
+              <button onClick={() => setShowErrorsModal(false)} className="p-2 hover:bg-gray-100 rounded-lg">×</button>
+            </div>
+
+            <div className="p-6">
+              {errorsLoading ? (
+                <div className="flex items-center text-gray-600"><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Cargando errores…</div>
+              ) : errorLogs.length === 0 ? (
+                <div className="text-gray-600">No hay errores registrados para este conector.</div>
+              ) : (
+                <ul className="space-y-4">
+                  {errorLogs.map((e: any) => {
+                    const started = e.started_at ? new Date(e.started_at).toLocaleString('es-ES') : '-';
+                    const endedTs = e.completed_at || e.ended_at;
+                    const ended = endedTs ? new Date(endedTs).toLocaleString('es-ES') : '-';
+                    const dur = e.duration_seconds != null ? `${e.duration_seconds}s` : '-';
+                    const target = String(e.sync_type || '').toLowerCase();
+                    let targetLabel = 'Sincronización';
+                    if (target === 'products') targetLabel = 'Productos';
+                    else if (target === 'purchase_orders') targetLabel = 'Órdenes de compra';
+                    else if (target === 'sales_orders') targetLabel = 'Pedidos';
+                    else if (target === 'transfers') targetLabel = 'Traspasos';
+                    return (
+                      <li key={e.id} className="border border-red-200 rounded-lg p-4 bg-red-50">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center">
+                            <AlertCircle className="w-4 h-4 text-red-600 mr-2" />
+                            <span className="text-sm font-semibold text-red-700">{targetLabel}</span>
+                          </div>
+                          <span className="text-xs text-red-700">{String(e.status || 'error')}</span>
+                        </div>
+                        <div className="mt-2 text-sm text-red-800 break-words">{e.error_message || 'Sin mensaje de error'}</div>
+                        <div className="mt-2 text-xs text-gray-700">Inicio: {started} · Fin: {ended} · Duración: {dur}</div>
+                        <div className="mt-1 text-xs text-gray-700">Procesados: {e.records_processed ?? '-'} · Fallidos: {e.records_failed ?? '-'}</div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-3 p-6 border-t border-gray-200">
+              <button onClick={() => setShowErrorsModal(false)} className="px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200">Cerrar</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

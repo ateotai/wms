@@ -69,26 +69,29 @@ const zoneThenLocationCompare = (aStr: string, bStr: string, desc = false) => {
   return naturalCompare(restA, restB, desc);
 };
 
-export const getSortComparator = (taskType: TaskType) => {
+export const getSortComparator = <T>(taskType: TaskType) => {
   const rule = sortingRules[taskType] || { sortMode: 'alpha_desc', locationKey: 'location' };
   const key = rule.locationKey || 'location';
-  const pick = (obj: any) => String(obj?.[key] ?? '');
+  const pick = (obj: T) => {
+    const v = (obj as unknown as Record<string, unknown>)[key];
+    return typeof v === 'string' ? v : v == null ? '' : String(v);
+  };
 
   switch (rule.sortMode) {
     case 'alpha_asc':
-      return (a: any, b: any) => alphaCompare(pick(a), pick(b), false);
+      return (a: T, b: T) => alphaCompare(pick(a), pick(b), false);
     case 'alpha_desc':
-      return (a: any, b: any) => alphaCompare(pick(a), pick(b), true);
+      return (a: T, b: T) => alphaCompare(pick(a), pick(b), true);
     case 'natural_asc':
-      return (a: any, b: any) => naturalCompare(pick(a), pick(b), false);
+      return (a: T, b: T) => naturalCompare(pick(a), pick(b), false);
     case 'natural_desc':
-      return (a: any, b: any) => naturalCompare(pick(a), pick(b), true);
+      return (a: T, b: T) => naturalCompare(pick(a), pick(b), true);
     case 'zone_then_location_asc':
-      return (a: any, b: any) => zoneThenLocationCompare(pick(a), pick(b), false);
+      return (a: T, b: T) => zoneThenLocationCompare(pick(a), pick(b), false);
     case 'zone_then_location_desc':
-      return (a: any, b: any) => zoneThenLocationCompare(pick(a), pick(b), true);
+      return (a: T, b: T) => zoneThenLocationCompare(pick(a), pick(b), true);
     default:
-      return (a: any, b: any) => alphaCompare(pick(a), pick(b), true);
+      return (a: T, b: T) => alphaCompare(pick(a), pick(b), true);
   }
 };
 

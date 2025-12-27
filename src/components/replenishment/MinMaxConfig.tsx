@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase } from '../../lib/supabase';
-import { BarChart3, Save, Edit2, Search, RefreshCw } from 'lucide-react';
+import { BarChart3, Save, Edit2, RefreshCw } from 'lucide-react';
 
 const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
 
@@ -19,7 +19,6 @@ interface ProductRow {
 
 export function MinMaxConfig({ searchTerm = '' }: MinMaxConfigProps) {
   const { token } = useAuth();
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [editing, setEditing] = useState<Record<string, { min: number; reorder: number }>>({});
@@ -29,7 +28,6 @@ export function MinMaxConfig({ searchTerm = '' }: MinMaxConfigProps) {
 
   const loadProducts = async () => {
     try {
-      setLoading(true);
       setError(null);
       if (AUTH_BACKEND_URL) {
         const url = new URL('/products/list', AUTH_BACKEND_URL);
@@ -54,7 +52,7 @@ export function MinMaxConfig({ searchTerm = '' }: MinMaxConfigProps) {
     } catch (e: any) {
       setError('No se pudo cargar el catálogo de productos');
     } finally {
-      setLoading(false);
+      // no-op
     }
   };
 

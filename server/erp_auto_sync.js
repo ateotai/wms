@@ -83,7 +83,7 @@ function initErpAutoSyncScheduler({ APP_PORT, supabase }) {
 
       const eligible = (connectors || [])
         .filter(c => String(c.status || '').toLowerCase() !== 'syncing')
-        .filter(c => supportsAutoSync ? (c.auto_sync !== false) : true);
+        .filter(c => supportsAutoSync ? (c.auto_sync === true) : false);
 
       for (const c of eligible) {
         for (const target of ERP_AUTO_SYNC_TARGETS) {

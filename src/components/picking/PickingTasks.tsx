@@ -49,86 +49,40 @@ interface PickingTask {
   notes?: string;
 }
 
-export function PickingTasks() {
+export function PickingTasks({ mode }: { mode?: 'picking' | 'putaway' }) {
   const { user } = useAuth();
   const isAdmin = (user?.role as any) === 'ADMIN';
   const token = typeof window !== 'undefined' ? localStorage.getItem('app_token') : null;
   const [searchParams, setSearchParams] = useSearchParams();
-  const statusFilter = (searchParams.get('status') || '').toLowerCase();
+  const statusFilterRaw = (searchParams.get('status') || '').toLowerCase();
   const priorityFilter = (searchParams.get('priority') || '').toLowerCase();
   const zoneFilter = (searchParams.get('zone') || '').toLowerCase();
   const searchFilter = (searchParams.get('q') || '').toLowerCase();
   const onlyFilter = (searchParams.get('only') || '').toLowerCase();
-  const isPutawayView = onlyFilter === 'putaway';
+  const isPutawayView = mode === 'putaway' || onlyFilter === 'putaway';
+  const statusFilter = isPutawayView && !statusFilterRaw ? 'pending' : statusFilterRaw;
   const [showLabelModal, setShowLabelModal] = useState(false);
   const [labelTask, setLabelTask] = useState<{ id: string; orderNumber: string; customer?: string; assignedTo?: string; location?: string; notes?: string } | null>(null);
   const [showNewTaskModal, setShowNewTaskModal] = useState(false);
 
-  const initialTasks: PickingTask[] = [
-    {
-      id: '1',
-      orderNumber: 'ORD-2024-001',
-      customer: 'Distribuidora ABC',
-      priority: 'high',
-      status: 'pending',
-      assignedTo: 'Juan Pérez',
-      zone: 'Zona A - Picking',
-      location: 'A-01-15',
-      items: [
-        { sku: 'PROD-001', name: 'Producto A', quantity: 5, picked: 0, location: 'A-01-15' },
-        { sku: 'PROD-002', name: 'Producto B', quantity: 3, picked: 0, location: 'A-02-08' },
-        { sku: 'PROD-003', name: 'Producto C', quantity: 2, picked: 0, location: 'A-03-12' }
-      ],
-      estimatedTime: 15,
-      createdAt: '2024-01-20T08:30:00',
-      dueDate: '2024-01-20T12:00:00'
-    },
-    {
-      id: '2',
-      orderNumber: 'ORD-2024-002',
-      customer: 'Comercial XYZ',
-      priority: 'medium',
-      status: 'in_progress',
-      assignedTo: 'María García',
-      zone: 'Zona A - Picking',
-      location: 'A-04-20',
-      items: [
-        { sku: 'PROD-004', name: 'Producto D', quantity: 8, picked: 5, location: 'A-04-20' },
-        { sku: 'PROD-005', name: 'Producto E', quantity: 4, picked: 4, location: 'A-05-03' }
-      ],
-      estimatedTime: 20,
-      actualTime: 12,
-      createdAt: '2024-01-20T09:15:00',
-      dueDate: '2024-01-20T14:00:00'
-    },
-    {
-      id: '3',
-      orderNumber: 'ORD-2024-003',
-      customer: 'Retail 123',
-      priority: 'low',
-      status: 'completed',
-      assignedTo: 'Carlos López',
-      zone: 'Zona B - Reserva',
-      location: 'B-01-05',
-      items: [
-        { sku: 'PROD-006', name: 'Producto F', quantity: 1, picked: 1, location: 'B-01-05' }
-      ],
-      estimatedTime: 8,
-      actualTime: 6,
-      createdAt: '2024-01-20T07:45:00',
-      dueDate: '2024-01-20T11:00:00',
-      notes: 'Completado sin incidencias'
-    }
-  ];
+  const initialTasks: PickingTask[] = [];
 
   const [tasks, setTasks] = useState<PickingTask[]>(() => {
     const filterForUser = (list: PickingTask[]) => {
-      if (isAdmin) return list;
-      const meEmail = (user?.email || '').toLowerCase();
-      const meName = (user?.full_name || user?.name || '').toLowerCase();
-      return (list || []).filter(t => {
-        const assigned = String(t.assignedTo || '').toLowerCase();
-        return assigned === meEmail || assigned === meName || assigned.includes(meEmail) || assigned.includes(meName);
+      let filtered = list || [];
+      // Filtro de usuario: en vista de Acomodo, mostrar todas sin exigir asignación
+      if (!isAdmin && !isPutawayView) {
+        const meEmail = (user?.email || '').toLowerCase();
+        const meName = (user?.full_name || user?.name || '').toLowerCase();
+        filtered = filtered.filter(t => {
+          const assigned = String(t.assignedTo || '').toLowerCase();
+          return assigned === meEmail || assigned === meName || assigned.includes(meEmail) || assigned.includes(meName);
+        });
+      }
+      // Filtro de tipo (Picking vs Acomodo) para evitar flash de datos incorrectos
+      return filtered.filter(t => {
+        const isPutaway = String(t.customer || '').toLowerCase().includes('acomodo');
+        return isPutawayView ? isPutaway : !isPutaway;
       });
     };
     try {
@@ -171,14 +125,17 @@ export function PickingTasks() {
           const all = JSON.parse(raw);
           const meEmail = (user?.email || '').toLowerCase();
           const meName = (user?.full_name || user?.name || '').toLowerCase();
-          let visible = isAdmin ? all : (all || []).filter((t: PickingTask) => {
-            const assigned = String(t.assignedTo || '').toLowerCase();
-            return assigned === meEmail || assigned === meName || assigned.includes(meEmail) || assigned.includes(meName);
-          });
-          // Separación: mostrar solo acomodo si only=putaway; de lo contrario, excluir acomodo
+          let visible: PickingTask[] = all;
+          if (!isAdmin && !isPutawayView) {
+            visible = (all || []).filter((t: PickingTask) => {
+              const assigned = String(t.assignedTo || '').toLowerCase();
+              return assigned === meEmail || assigned === meName || assigned.includes(meEmail) || assigned.includes(meName);
+            });
+          }
+          // Separación: mostrar solo acomodo si estamos en vista acomodo; de lo contrario, excluir acomodo
           visible = (visible || []).filter((t: PickingTask) => {
             const isPutaway = isPutawayTask(t);
-            return onlyFilter === 'putaway' ? isPutaway : !isPutaway;
+            return isPutawayView ? isPutaway : !isPutaway;
           });
           setTasks(visible);
         }
@@ -186,7 +143,7 @@ export function PickingTasks() {
     };
     window.addEventListener('picking_tasks_updated', handler as EventListener);
     return () => window.removeEventListener('picking_tasks_updated', handler as EventListener);
-  }, [user?.email, user?.full_name, user?.role, onlyFilter]);
+  }, [user?.email, user?.full_name, user?.role, isPutawayView]);
 
   // Cargar tareas reales desde el backend (con filtro opcional de estado)
   useEffect(() => {
@@ -201,9 +158,13 @@ export function PickingTasks() {
         // Preferir endpoint específico de acomodo si estamos en esa vista
         if (isPutawayView) {
           try {
-            const respPutaway = await fetch(`${AUTH_BACKEND_URL}/putaway/tasks${qs}`);
+            const respPutaway = await fetch(`${AUTH_BACKEND_URL}/putaway/tasks${qs}`, {
+               headers: token ? { Authorization: `Bearer ${token}` } : {},
+            });
             if (respPutaway.ok) {
               data = await respPutaway.json();
+            } else if (respPutaway.status === 401) {
+              console.error('No autorizado para cargar tareas de acomodo');
             }
           } catch {}
         }
@@ -213,7 +174,9 @@ export function PickingTasks() {
           const qs2 = isPutawayView
             ? (qs ? `${qs}&type=putaway` : `?type=putaway`)
             : qs;
-          const resp = await fetch(`${AUTH_BACKEND_URL}/picking/tasks${qs2}`);
+          const resp = await fetch(`${AUTH_BACKEND_URL}/picking/tasks${qs2}`, {
+             headers: token ? { Authorization: `Bearer ${token}` } : {},
+          });
           if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
           data = await resp.json();
         }
@@ -225,8 +188,13 @@ export function PickingTasks() {
           try {
             const raw = localStorage.getItem('picking_tasks');
             local = raw ? JSON.parse(raw) : [];
+            // Si estamos en vista de acomodo, FILTRAR tareas locales de acomodo para respetar la limpieza
+            if (isPutawayView) {
+               local = local.filter(t => !isPutawayTask(t));
+            }
           } catch {}
           const byId = new Map<string, PickingTask>();
+          // Prioridad a las del backend
           for (const t of Array.isArray(all) ? all : []) {
             if (t && t.id) byId.set(String(t.id), t);
           }
@@ -236,14 +204,17 @@ export function PickingTasks() {
           const merged: PickingTask[] = Array.from(byId.values());
           const meEmail = (user?.email || '').toLowerCase();
           const meName = (user?.full_name || user?.name || '').toLowerCase();
-          let visible = isAdmin ? merged : (merged || []).filter(t => {
-            const assigned = String(t.assignedTo || '').toLowerCase();
-            return assigned === meEmail || assigned === meName || assigned.includes(meEmail) || assigned.includes(meName);
-          });
-          // Separación: mostrar solo acomodo si only=putaway; de lo contrario, excluir acomodo
+          let visible: PickingTask[] = merged;
+          if (!isAdmin && !isPutawayView) {
+            visible = (merged || []).filter(t => {
+              const assigned = String(t.assignedTo || '').toLowerCase();
+              return assigned === meEmail || assigned === meName || assigned.includes(meEmail) || assigned.includes(meName);
+            });
+          }
+          // Separación: mostrar solo acomodo si estamos en vista acomodo; de lo contrario, excluir acomodo
           visible = (visible || []).filter((t: PickingTask) => {
             const isPutaway = isPutawayTask(t);
-            return onlyFilter === 'putaway' ? isPutaway : !isPutaway;
+            return isPutawayView ? isPutaway : !isPutaway;
           });
           setTasks(visible);
         }
@@ -255,7 +226,7 @@ export function PickingTasks() {
       }
     };
     fetchTasks();
-  }, [statusFilter, user?.email, user?.full_name, user?.role, onlyFilter]);
+  }, [statusFilter, user?.email, user?.full_name, user?.role, isPutawayView, token]);
 
   const [selectedTask, setSelectedTask] = useState<PickingTask | null>(null);
   const [showDetails, setShowDetails] = useState(false);
@@ -332,8 +303,10 @@ export function PickingTasks() {
   }, [showDetails, selectedTask, AUTH_BACKEND_URL]);
 
   const getItemCatalogLocation = (item: PickingTask['items'][number]) => {
-    const catalog = productLocationsBySku[item.sku];
-    return catalog ?? (item as any)?.destination ?? item.location ?? '';
+    const catalog = String(productLocationsBySku[item.sku] || '').trim();
+    const destination = String((item as any)?.destination || '').trim();
+    const location = String(item.location || '').trim();
+    return catalog || destination || location || '';
   };
 
   const setItemDestination = (sku: string, value: string) => {
@@ -468,7 +441,8 @@ export function PickingTasks() {
         || locations.find(l => String(l.code).toLowerCase() === String(item.location || '').toLowerCase());
 
       if (!location || !location.id || !location.warehouse_id) {
-        alert('No se pudo resolver la ubicación/almacén para el movimiento de inventario.');
+        alert('No se pudo resolver la ubicación/almacén destino para el movimiento de inventario.');
+        setCompletingSku(null);
         return;
       }
 
@@ -486,28 +460,84 @@ export function PickingTasks() {
 
       if (!productId) {
         alert('No se encontró el producto para este SKU.');
+        setCompletingSku(null);
         return;
       }
 
       if (AUTH_BACKEND_URL) {
-        const resp = await fetch(`${AUTH_BACKEND_URL}/inventory/movements`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: token ? `Bearer ${token}` : '' },
-          body: JSON.stringify({
-            product_id: productId,
-            warehouse_id: location.warehouse_id,
-            location_id: location.id,
-            movement_type: 'IN',
-            transaction_type: 'RECEIPT',
-            quantity: item.quantity,
-            reason: 'Completo desde tarea de picking',
-            reference_number: task.orderNumber,
-            reference_type: 'picking_task',
-          }),
-        });
-        if (!resp.ok) {
-          const t = await resp.text().catch(() => '');
-          throw new Error(t || `HTTP ${resp.status}`);
+        const isPutaway = isPutawayTask(task) || isPutawayView;
+
+        if (isPutaway) {
+          // Lógica Acomodo: Sacar de Recepción (si existe) -> Meter en Destino
+          // 1. Buscar ubicación RECV
+          const sourceLoc = locations.find(l => String(l.code).toUpperCase() === 'RECV' || String(l.location_type).toLowerCase() === 'receiving');
+          
+          if (sourceLoc && sourceLoc.id) {
+            // OUT desde Recepción
+            try {
+              await fetch(`${AUTH_BACKEND_URL}/inventory/movements`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', Authorization: token ? `Bearer ${token}` : '' },
+                body: JSON.stringify({
+                  product_id: productId,
+                  warehouse_id: sourceLoc.warehouse_id || location.warehouse_id,
+                  location_id: sourceLoc.id,
+                  movement_type: 'OUT',
+                  transaction_type: 'TRANSFER_OUT',
+                  quantity: item.quantity,
+                  reason: 'Salida de recepción por acomodo',
+                  reference_number: task.orderNumber,
+                  reference_type: 'putaway_task_out',
+                }),
+              });
+            } catch (e) {
+              console.warn('Error al descontar de recepción (posiblemente ya no estaba allí):', e);
+            }
+          }
+
+          // IN a Destino (Storage)
+          const resp = await fetch(`${AUTH_BACKEND_URL}/inventory/movements`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: token ? `Bearer ${token}` : '' },
+            body: JSON.stringify({
+              product_id: productId,
+              warehouse_id: location.warehouse_id,
+              location_id: location.id,
+              movement_type: 'IN',
+              transaction_type: 'TRANSFER_IN',
+              quantity: item.quantity,
+              reason: 'Entrada por acomodo completado',
+              reference_number: task.orderNumber,
+              reference_type: 'putaway_task_in',
+            }),
+          });
+          if (!resp.ok) {
+            const t = await resp.text().catch(() => '');
+            throw new Error(t || `HTTP ${resp.status}`);
+          }
+
+        } else {
+          // Lógica Picking (Legacy/Default): IN RECEIPT (¿?)
+          // Mantenemos comportamiento original para no romper flujos existentes ajenos al acomodo
+          const resp = await fetch(`${AUTH_BACKEND_URL}/inventory/movements`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: token ? `Bearer ${token}` : '' },
+            body: JSON.stringify({
+              product_id: productId,
+              warehouse_id: location.warehouse_id,
+              location_id: location.id,
+              movement_type: 'IN',
+              transaction_type: 'RECEIPT',
+              quantity: item.quantity,
+              reason: 'Completo desde tarea de picking',
+              reference_number: task.orderNumber,
+              reference_type: 'picking_task',
+            }),
+          });
+          if (!resp.ok) {
+            const t = await resp.text().catch(() => '');
+            throw new Error(t || `HTTP ${resp.status}`);
+          }
         }
       }
 
@@ -784,7 +814,7 @@ export function PickingTasks() {
                 className="border border-gray-300 rounded-md px-2 py-1 text-sm"
                 title="Filtrar por estado"
               >
-                <option value="">Todos</option>
+                <option value="all">Todos</option>
                 <option value="pending">Pendientes</option>
                 <option value="in_progress">Iniciados</option>
                 <option value="completed">Completas</option>
@@ -853,7 +883,13 @@ export function PickingTasks() {
           )}
           {(() => {
             let visible = tasks;
-            if (statusFilter) visible = visible.filter(t => String(t.status || '').toLowerCase() === statusFilter);
+            // Filtro estricto de tipo (Picking vs Acomodo) antes de renderizar
+            visible = visible.filter(t => {
+              const isPutaway = String(t.customer || '').toLowerCase().includes('acomodo');
+              return isPutawayView ? isPutaway : !isPutaway;
+            });
+
+            if (statusFilter && statusFilter !== 'all') visible = visible.filter(t => String(t.status || '').toLowerCase() === statusFilter);
             if (priorityFilter) visible = visible.filter(t => String(t.priority || '').toLowerCase() === priorityFilter);
             if (zoneFilter) {
               visible = visible.filter(t => {

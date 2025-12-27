@@ -105,7 +105,7 @@ export function OutgoingDocs() {
         // Fallback definitivo: pedir al backend detalles de productos por IDs
         const needBackendFallback = allProdIds.some(id => !prodMap[id]);
         if (needBackendFallback) {
-const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
           try {
             const resp = await fetch(`${AUTH_BACKEND_URL}/products/byIds`, {
               method: 'POST',

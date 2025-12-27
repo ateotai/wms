@@ -50,6 +50,24 @@ interface DBLocation {
   is_active: boolean | null;
 }
 
+type DBZone = {
+  id: string;
+  warehouse_id: string | null;
+  code: string;
+  name: string;
+  zone_type: 'receiving' | 'storage' | 'picking' | 'packing' | 'shipping' | 'cross_dock';
+  description: string | null;
+  capacity: number | null;
+  is_active: boolean | null;
+  temperature_controlled: boolean | null;
+  temperature_min: number | null;
+  temperature_max: number | null;
+  dimensions: { length: number; width: number; height: number } | null;
+  coordinates: { x: number; y: number } | null;
+  created_at: string;
+  updated_at: string;
+};
+
 import { supabase } from '../../lib/supabase';
 
 export function ZoneConfiguration() {
@@ -124,27 +142,10 @@ export function ZoneConfiguration() {
         setLoading(true);
         setError(null);
         // 1) Intentar cargar desde tabla real 'zones'
-        type DBZone = {
-          id: string;
-          warehouse_id: string | null;
-          code: string;
-          name: string;
-          zone_type: 'receiving' | 'storage' | 'picking' | 'packing' | 'shipping' | 'cross_dock';
-          description: string | null;
-          capacity: number | null;
-          is_active: boolean | null;
-          temperature_controlled: boolean | null;
-          temperature_min: number | null;
-          temperature_max: number | null;
-          dimensions: { length: number; width: number; height: number } | null;
-          coordinates: { x: number; y: number } | null;
-          created_at: string;
-          updated_at: string;
-        };
 
         let zonesQuery = supabase
           .from('zones')
-          .select('id, warehouse_id, code, name, zone_type, description, capacity, is_active, temperature_controlled, temperature_min, temperature_max, dimensions, coordinates, created_at, updated_at')
+          .select('id, warehouse_id, code, name, zone_type, description, capacity, is_active, created_at, updated_at')
           .order('name', { ascending: true });
         if (selectedWarehouseId !== 'all') {
           zonesQuery = zonesQuery.eq('warehouse_id', selectedWarehouseId);
@@ -156,7 +157,12 @@ export function ZoneConfiguration() {
             id: z.id,
             code: z.code,
             name: z.name,
-            type: (z.zone_type === 'packing' ? 'staging' : (z.zone_type as Zone['type'])) || 'storage',
+            type:
+              z.zone_type === 'packing'
+                ? 'staging'
+                : z.zone_type === 'cross_dock'
+                ? 'returns'
+                : (z.zone_type as Zone['type']) || 'storage',
             description: z.description || '',
             capacity: z.capacity || 0,
             dimensions: z.dimensions || { length: 0, width: 0, height: 0 },
@@ -268,13 +274,6 @@ export function ZoneConfiguration() {
     setShowForm(true);
   };
 
-  const normalizeCode = (name: string) => {
-    return name
-      .trim()
-      .toUpperCase()
-      .replace(/[^A-Z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '');
-  };
 
   const generateZonePrefix = (name: string) => {
     const base = (name || '')
@@ -299,130 +298,131 @@ export function ZoneConfiguration() {
         setError('El nombre de la zona es obligatorio');
         return;
       }
-      if (usingZonesTable && !formWarehouseId) {
+      
+      // Siempre requerir almacén si se va a guardar en BD (ahora siempre intentamos guardar en BD)
+      if (!formWarehouseId) {
         setError('Selecciona un almacén para asociar la zona');
         return;
       }
 
-      if (usingZonesTable) {
-        let code = (formData.code || '').toUpperCase();
-        if (!code || !/^[A-Z]{3}$/.test(code)) {
-          code = generateZonePrefix(formData.name || '');
-        }
-        // Mapear tipo de zona de la UI al esquema permitido en BD
-        const dbZoneType = (formData.type === 'staging')
-          ? 'packing'
-          : (formData.type === 'returns')
-          ? 'cross_dock'
-          : (formData.type || 'storage');
-        const payload: {
-          id?: string;
-          created_at?: string;
-          updated_at?: string;
-          name: string;
-          code: string;
-          zone_type: 'receiving' | 'storage' | 'picking' | 'packing' | 'shipping' | 'cross_dock';
-          description: string;
-          capacity: number;
-          is_active: boolean;
-          temperature_controlled: boolean;
-          temperature_min: number | null;
-          temperature_max: number | null;
-          dimensions: { length: number; width: number; height: number };
-          coordinates: { x: number; y: number };
-          warehouse_id: string | null;
-        } = {
-          name: formData.name,
-          code,
-          zone_type: dbZoneType,
-          description: formData.description || '',
-          capacity: formData.capacity || 0,
-          is_active: (formData.status || 'active') !== 'inactive',
-          temperature_controlled: (formData.temperature || 'ambient') !== 'ambient',
-          temperature_min: formData.temperature === 'frozen' ? -25 : formData.temperature === 'cold' ? 2 : null,
-          temperature_max: formData.temperature === 'frozen' ? -10 : formData.temperature === 'cold' ? 8 : null,
-          dimensions: formData.dimensions || { length: 0, width: 0, height: 0 },
-          coordinates: formData.coordinates || { x: 0, y: 0 },
-          warehouse_id: formWarehouseId
-        };
+      // Intentar guardar en la tabla 'zones' independientemente de usingZonesTable
+      // (Si la tabla no existe, fallará y mostraremos el error, pero si existe, funcionará)
+      let code = (formData.code || '').toUpperCase();
+      if (!code || !/^[A-Z]{3}$/.test(code)) {
+        code = generateZonePrefix(formData.name || '');
+      }
+      // Mapear tipo de zona de la UI al esquema permitido en BD
+      const dbZoneType = (formData.type === 'staging')
+        ? 'packing'
+        : (formData.type === 'returns')
+        ? 'cross_dock'
+        : (formData.type || 'storage');
+      const payload: {
+        id?: string;
+        created_at?: string;
+        updated_at?: string;
+        name: string;
+        code: string;
+        zone_type: 'receiving' | 'storage' | 'picking' | 'packing' | 'shipping' | 'cross_dock';
+        description: string;
+        capacity: number;
+        is_active: boolean;
+        warehouse_id: string | null;
+      } = {
+        name: formData.name,
+        code,
+        zone_type: dbZoneType,
+        description: formData.description || '',
+        capacity: formData.capacity || 0,
+        is_active: (formData.status || 'active') !== 'inactive',
+        warehouse_id: formWarehouseId
+      };
 
-        if (editingZone) {
-          const { error: updError } = await supabase
-            .from('zones')
-            .update(payload)
-            .eq('id', editingZone.id);
-          if (updError) throw updError;
-        } else {
-          const { data: inserted, error: insError } = await supabase
-            .from('zones')
-            .insert(payload)
-            .select('id, created_at, updated_at')
-            .single();
-          if (insError) throw insError;
-          // Asignar ID recién creado
-          payload.id = inserted?.id;
-          payload.created_at = inserted?.created_at;
-          payload.updated_at = inserted?.updated_at;
-        }
+      if (editingZone) {
+        const { error: updError } = await supabase
+          .from('zones')
+          .update(payload)
+          .eq('id', editingZone.id);
+        if (updError) throw updError;
+      } else {
+        const { data: inserted, error: insError } = await supabase
+          .from('zones')
+          .insert(payload)
+          .select('id, created_at, updated_at')
+          .single();
+        if (insError) throw insError;
+        // Asignar ID recién creado
+        payload.id = inserted?.id;
+        payload.created_at = inserted?.created_at;
+        payload.updated_at = inserted?.updated_at;
+      }
 
-        // Si se está editando y el prefijo cambió, ofrecer actualización en cascada de ubicaciones
-        if (editingZone) {
-          const oldCode = (editingZone.code || '').toUpperCase();
-          const newCode = (code || '').toUpperCase();
-          if (oldCode && newCode && oldCode !== newCode) {
-            const confirmCascade = confirm(
-              `Has cambiado el prefijo de la zona de "${oldCode}" a "${newCode}".\n\n` +
-              `¿Quieres actualizar en cascada todas las ubicaciones del almacén asociadas a la zona "${oldCode}" para que usen "${newCode}"?\n` +
-              `Esta acción modificará el campo Zona (locations.zone).`
-            );
-            if (confirmCascade) {
-              try {
-                let updateQuery = supabase
-                  .from('locations')
-                  .update({ zone: newCode })
-                  .eq('zone', oldCode);
-                if (formWarehouseId) {
-                  updateQuery = updateQuery.eq('warehouse_id', formWarehouseId);
-                }
-                const { error: updLocErr } = await updateQuery;
-                if (updLocErr) throw updLocErr;
-              } catch (cascadeErr) {
-                console.error('Error en actualización en cascada de ubicaciones:', cascadeErr);
-                setError('La zona se guardó, pero no se pudo actualizar las ubicaciones en cascada. Verifica permisos/RLS.');
+      // Si se está editando y el prefijo cambió, ofrecer actualización en cascada de ubicaciones
+      if (editingZone) {
+        const oldCode = (editingZone.code || '').toUpperCase();
+        const newCode = (code || '').toUpperCase();
+        if (oldCode && newCode && oldCode !== newCode) {
+          const confirmCascade = confirm(
+            `Has cambiado el prefijo de la zona de "${oldCode}" a "${newCode}".\n\n` +
+            `¿Quieres actualizar en cascada todas las ubicaciones del almacén asociadas a la zona "${oldCode}" para que usen "${newCode}"?\n` +
+            `Esta acción modificará el campo Zona (locations.zone).`
+          );
+          if (confirmCascade) {
+            try {
+              let updateQuery = supabase
+                .from('locations')
+                .update({ zone: newCode })
+                .eq('zone', oldCode);
+              if (formWarehouseId) {
+                updateQuery = updateQuery.eq('warehouse_id', formWarehouseId);
               }
+              const { error: updLocErr } = await updateQuery;
+              if (updLocErr) throw updLocErr;
+            } catch (cascadeErr) {
+              console.error('Error en actualización en cascada de ubicaciones:', cascadeErr);
+              setError('La zona se guardó, pero no se pudo actualizar las ubicaciones en cascada. Verifica permisos/RLS.');
             }
           }
         }
-
-        // Refrescar listado desde BD
-        let refreshQuery = supabase
-          .from('zones')
-          .select('id, warehouse_id, code, name, zone_type, description, capacity, is_active, temperature_controlled, temperature_min, temperature_max, dimensions, coordinates, created_at, updated_at')
-          .order('name', { ascending: true });
-        if (selectedWarehouseId !== 'all') {
-          refreshQuery = refreshQuery.eq('warehouse_id', selectedWarehouseId);
-        }
-        const { data: dbZones } = await refreshQuery;
-        const uiZones: Zone[] = (((dbZones ?? []) as unknown) as DBZone[]).map((z) => ({
-          id: z.id,
-          code: z.code,
-          name: z.name,
-          type: (z.zone_type === 'packing' ? 'staging' : z.zone_type) || 'storage',
-          description: z.description || '',
-          capacity: z.capacity || 0,
-          dimensions: z.dimensions || { length: 0, width: 0, height: 0 },
-          coordinates: z.coordinates || { x: 0, y: 0 },
-          status: z.is_active ? 'active' : 'inactive',
-          temperature: z.temperature_controlled
-            ? (z.temperature_min !== null && z.temperature_min <= 0 ? 'frozen' : 'cold')
-            : 'ambient',
-          restrictions: [],
-          createdAt: z.created_at?.split('T')[0] || '',
-          updatedAt: z.updated_at?.split('T')[0] || '',
-          warehouseId: z.warehouse_id
-        }));
-        setZones(uiZones);
       }
+
+      // Refrescar listado desde BD
+      let refreshQuery = supabase
+          .from('zones')
+          .select('id, warehouse_id, code, name, zone_type, description, capacity, is_active, created_at, updated_at')
+          .order('name', { ascending: true });
+      if (selectedWarehouseId !== 'all') {
+        refreshQuery = refreshQuery.eq('warehouse_id', selectedWarehouseId);
+      }
+      const { data: dbZones } = await refreshQuery;
+      const uiZones: Zone[] = (dbZones as DBZone[] || []).map((z) => ({
+        id: z.id,
+        code: z.code,
+        name: z.name,
+        type:
+          z.zone_type === 'packing'
+            ? 'staging'
+            : z.zone_type === 'cross_dock'
+            ? 'returns'
+            : (z.zone_type as Zone['type']) || 'storage',
+        description: z.description || '',
+        capacity: z.capacity || 0,
+        dimensions: z.dimensions || { length: 0, width: 0, height: 0 },
+        coordinates: z.coordinates || { x: 0, y: 0 },
+        status: z.is_active ? 'active' : 'inactive',
+        temperature: z.temperature_controlled
+          ? (z.temperature_min !== null && z.temperature_min <= 0 ? 'frozen' : 'cold')
+          : 'ambient',
+        restrictions: [],
+        createdAt: z.created_at?.split('T')[0] || '',
+        updatedAt: z.updated_at?.split('T')[0] || '',
+        warehouseId: z.warehouse_id
+      }));
+      setZones(uiZones);
+      
+      // Si tuvimos éxito, asumimos que la tabla existe y la usamos
+      setUsingZonesTable(true);
+      setSetupHint(null);
 
       setShowForm(false);
       setEditingZone(null);

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { 
   User, 
   Mail, 
@@ -9,17 +9,14 @@ import {
   Key,
   Bell,
   Globe,
-  Moon,
   Sun,
   Save,
   Edit,
   Camera,
-  Lock,
   Eye,
   EyeOff,
   Check,
   X,
-  AlertCircle,
   Clock,
   Activity,
   Settings

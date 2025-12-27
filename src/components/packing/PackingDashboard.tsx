@@ -339,34 +339,47 @@ export function PackingDashboard() {
         // IDs usados en picking activo para excluir
         const usedResp = await fetch(`${AUTH_BACKEND_URL}/picking/batches/used-docs`, { headers: token ? { Authorization: `Bearer ${token}` } : undefined });
         const usedJson = await usedResp.json().catch(() => ({} as any));
-        const usedIds: string[] = Array.isArray(usedJson?.doc_ids) ? usedJson.doc_ids.map((x: any) => String(x)) : [];
+        const usedIds: string[] = [
+          ...(Array.isArray(usedJson?.order_ids) ? usedJson.order_ids.map((x: any) => String(x)) : []),
+          ...(Array.isArray(usedJson?.transfer_ids) ? usedJson.transfer_ids.map((x: any) => String(x)) : []),
+          ...(Array.isArray(usedJson?.doc_ids) ? usedJson.doc_ids.map((x: any) => String(x)) : [])
+        ];
 
-        // Pedidos y traspasos de mock SAP
-        const poResp = await fetch(`${AUTH_BACKEND_URL}/mock/sap/PurchaseOrderSet?$top=50`);
-        const poJson = await poResp.json().catch(() => ({ d: { results: [] } }));
-        const poItems = Array.isArray(poJson?.d?.results) ? poJson.d.results : [];
-        const soResp = await fetch(`${AUTH_BACKEND_URL}/mock/sap/SalesOrderSet?$top=50`);
-        const soJson = await soResp.json().catch(() => ({ d: { results: [] } }));
-        const soItems = Array.isArray(soJson?.d?.results) ? soJson.d.results : [];
-        const trResp = await fetch(`${AUTH_BACKEND_URL}/mock/sap/TransferSet?$top=50`);
-        const trJson = await trResp.json().catch(() => ({ d: { results: [] } }));
-        const trItems = Array.isArray(trJson?.d?.results) ? trJson.d.results : [];
+        // Pedidos y traspasos de Supabase
+        const { data: poItems, error: poErr } = await supabase
+          .from('purchase_orders')
+          .select('id, po_number, status')
+          .not('status', 'in', '("received","cancelled","packed")') // Excluir packed
+          .limit(50);
+        
+        const { data: soItems, error: soErr } = await supabase
+          .from('sales_orders')
+          .select('id, so_number, status')
+          .not('status', 'in', '("shipped","delivered","cancelled","packed")') // Excluir packed
+          .limit(50);
+
+        const { data: trItems, error: trErr } = await supabase
+          .from('transfers')
+          .select('id, number, status')
+          .not('status', 'in', '("completed","cancelled","packed")') // Excluir packed
+          .limit(50);
 
         const docs: Array<{ id: string; type: 'order' | 'transfer'; docNumber: string; status?: string }> = [];
-        for (const p of poItems) {
-          const id = String(p?.PurchaseOrderID || p?.DocNum || p?.id || '');
-          const num = id;
-          if (id && !usedIds.includes(id)) docs.push({ id, type: 'order', docNumber: num, status: 'PO' });
+        
+        for (const p of (poItems || [])) {
+          const id = String(p.id);
+          const num = String(p.po_number || id);
+          if (id && !usedIds.includes(id)) docs.push({ id, type: 'order', docNumber: num, status: p.status || 'PO' });
         }
-        for (const s of soItems) {
-          const id = String(s?.SalesOrderID || s?.DocNum || s?.id || '');
-          const num = id;
-          if (id && !usedIds.includes(id)) docs.push({ id, type: 'order', docNumber: num, status: 'SO' });
+        for (const s of (soItems || [])) {
+          const id = String(s.id);
+          const num = String(s.so_number || id);
+          if (id && !usedIds.includes(id)) docs.push({ id, type: 'order', docNumber: num, status: s.status || 'SO' });
         }
-        for (const t of trItems) {
-          const id = String(t?.TransferID || t?.TransferNum || t?.id || '');
-          const num = id;
-          if (id && !usedIds.includes(id)) docs.push({ id, type: 'transfer', docNumber: num, status: 'TR' });
+        for (const t of (trItems || [])) {
+          const id = String(t.id);
+          const num = String(t.number || id);
+          if (id && !usedIds.includes(id)) docs.push({ id, type: 'transfer', docNumber: num, status: t.status || 'TR' });
         }
         setAvailableDocs(docs);
       } catch {

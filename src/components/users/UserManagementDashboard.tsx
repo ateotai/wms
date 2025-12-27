@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
 import { 
   Users, 
@@ -9,10 +9,9 @@ import {
   Search,
   Filter,
   Download,
-  RefreshCw,
   TrendingUp,
   TrendingDown,
-  AlertCircle
+  
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { UserList } from './UserList';

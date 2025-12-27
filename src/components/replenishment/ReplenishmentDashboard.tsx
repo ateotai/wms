@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Routes, Route as RouterRoute, Link, useLocation } from 'react-router-dom';
 import { RotateCcw, BarChart3, Filter, Search, RefreshCw, Plus, Download } from 'lucide-react';
 import { ReplenishmentTasks } from './ReplenishmentTasks';
@@ -7,7 +7,7 @@ import { MinMaxConfig } from './MinMaxConfig';
 export function ReplenishmentDashboard() {
   const location = useLocation();
   const [searchTerm, setSearchTerm] = useState('');
-  const [showImportModal, setShowImportModal] = useState(false);
+  
 
   const tabs = [
     { name: 'Tareas', href: '/replenishment/tasks', icon: RotateCcw },
@@ -27,7 +27,7 @@ export function ReplenishmentDashboard() {
             <RefreshCw className="w-4 h-4 mr-2" />
             Actualizar
           </button>
-          <button onClick={() => setShowImportModal(true)} className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
+          <button className="inline-flex items-center px-3 py-2 border border-gray-300 rounded-md text-sm font-medium text-gray-700 bg-white hover:bg-gray-50">
             <Download className="w-4 h-4 mr-2" />
             Exportar CSV
           </button>

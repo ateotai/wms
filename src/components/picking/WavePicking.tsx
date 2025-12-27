@@ -108,7 +108,7 @@ export function WavePicking() {
 
   // Cargar lotes y computar olas agrupadas por código de ola (OLA-YYYYMMDD-XXX)
   useEffect(() => {
-    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
     const load = async () => {
       setLoading(true);
       setError(null);
@@ -227,7 +227,7 @@ export function WavePicking() {
 
   // Suscripción SSE para refrescar olas cuando cambian lotes
   useEffect(() => {
-    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
     const es = new EventSource(`${AUTH_BACKEND_URL}/picking/batches/stream`);
     es.onmessage = () => setRefreshToken((t) => t + 1);
     es.onerror = () => { es.close(); };
@@ -265,7 +265,7 @@ export function WavePicking() {
 
   useEffect(() => {
     // Cargar documentos disponibles para selección (órdenes y traspasos)
-    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
     const loadDocs = async () => {
       // Obtener IDs ya utilizados en lotes activos para excluirlos
       let usedOrderIds = new Set<string>();
@@ -340,7 +340,7 @@ export function WavePicking() {
   // Búsqueda en tiempo real de usuarios para "Asignar a"
   useEffect(() => {
     const q = (userQuery || '').trim();
-    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
     const ctrl = new AbortController();
     const id = setTimeout(async () => {
       try {
@@ -375,7 +375,7 @@ export function WavePicking() {
   // Guardar cambios de edición sobre todos los lotes de la ola
   const saveEditWave = async () => {
     if (!editingWave) return;
-    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
     try {
       // aplicar en cada lote de la ola
       for (const b of editingWave.batches) {
@@ -667,7 +667,7 @@ export function WavePicking() {
   };
 
   const handleStartWave = async (waveId: string) => {
-    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
     // Intentar iniciar lotes pendientes de la ola (si el backend lo permite para el usuario)
     const target = waves.find(w => w.id === waveId);
     if (target) {
@@ -695,7 +695,7 @@ export function WavePicking() {
   };
 
   const handleCompleteWave = async (waveId: string) => {
-    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || (import.meta.env.DEV ? 'http://localhost:8082' : '');
+    const AUTH_BACKEND_URL = import.meta.env.VITE_AUTH_BACKEND_URL || '';
     const target = waves.find(w => w.id === waveId);
     if (target) {
       for (const b of target.batches) {

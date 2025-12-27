@@ -77,8 +77,8 @@ export function Sidebar() {
         { name: 'Órdenes de Compra', href: '/reception/orders', icon: FileText, permissionId: 'reception.view' },
         { name: 'Citas', href: '/reception/appointments', icon: Calendar, permissionId: 'reception.view' },
         { name: 'Control de Recepción', href: '/reception/control', icon: Package, permissionId: 'reception.view' },
-        { name: 'Tareas de Recepción', href: '/reception/receiving', icon: Package, permissionId: 'reception.view' },
-        { name: 'ASN', href: '/reception/asn', icon: Truck, permissionId: 'reception.view' }
+        // { name: 'Tareas de Recepción', href: '/reception/receiving', icon: Package, permissionId: 'reception.view' },
+        // { name: 'ASN', href: '/reception/asn', icon: Truck, permissionId: 'reception.view' }
       ]
     },
     {
@@ -119,7 +119,7 @@ export function Sidebar() {
         { name: 'Mínimos/Máximos', href: '/replenishment/min-max', icon: BarChart3, permissionId: 'replenishment.view' }
       ]
     },
-    { name: 'Conectores ERP', href: '/integrations', icon: Globe, permissionId: 'integrations.view' },
+    { name: 'Conectores ERP', href: '/integrations/erp', icon: Globe, permissionId: 'integrations.view' },
     {
       name: 'Reportes y Analítica',
       icon: BarChart3,

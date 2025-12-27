@@ -1,0 +1,1 @@
+SELECT * FROM picking_tasks;

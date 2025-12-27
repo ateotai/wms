@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { 
   Edit, 
@@ -13,13 +13,7 @@ import {
   Calendar,
   CheckCircle,
   XCircle,
-  Clock,
   Users,
-  Search,
-  Filter,
-  Plus,
-  Download,
-  Upload,
   RefreshCw,
   AlertCircle
 } from 'lucide-react';
@@ -93,73 +87,8 @@ export function UserList({ searchTerm, selectedRole }: UserListProps) {
     }
   };
 
-  // Mock data for users (fallback)
-  const mockUsers: User[] = [
-    {
-      id: '1',
-      name: 'Ana García',
-      email: 'ana.garcia@empresa.com',
-      phone: '+34 600 123 456',
-      role: 'admin',
-      status: 'active',
-      lastLogin: '2024-01-15 09:30',
-      createdAt: '2023-06-15'
-    },
-    {
-      id: '2',
-      name: 'Carlos Rodríguez',
-      email: 'carlos.rodriguez@empresa.com',
-      phone: '+34 600 234 567',
-      role: 'manager',
-      status: 'active',
-      lastLogin: '2024-01-15 08:45',
-      createdAt: '2023-07-20'
-    },
-    {
-      id: '3',
-      name: 'María López',
-      email: 'maria.lopez@empresa.com',
-      phone: '+34 600 345 678',
-      role: 'supervisor',
-      status: 'inactive',
-      lastLogin: '2024-01-10 16:20',
-      createdAt: '2023-08-10'
-    },
-    {
-      id: '4',
-      name: 'David Martín',
-      email: 'david.martin@empresa.com',
-      phone: '+34 600 456 789',
-      role: 'operator',
-      status: 'active',
-      lastLogin: '2024-01-15 07:15',
-      createdAt: '2023-09-05'
-    },
-    {
-      id: '5',
-      name: 'Laura Sánchez',
-      email: 'laura.sanchez@empresa.com',
-      phone: '+34 600 567 890',
-      role: 'viewer',
-      status: 'pending',
-      lastLogin: 'Nunca',
-      createdAt: '2024-01-14'
-    }
-  ];
+  // Mock data placeholder (unused)
 
-  const roleLabels = {
-    admin: 'Administrador',
-    manager: 'Gerente',
-    supervisor: 'Supervisor',
-    operator: 'Operador',
-    viewer: 'Solo lectura'
-  };
-
-  const statusLabels = {
-    active: 'Activo',
-    inactive: 'Inactivo',
-    pending: 'Pendiente'
-  };
 
   const filteredUsers = useMemo(() => {
     return users.filter(user => {

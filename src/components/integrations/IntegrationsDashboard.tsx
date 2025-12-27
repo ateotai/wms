@@ -94,7 +94,7 @@ export function IntegrationsDashboard() {
         try {
           const { data, error } = await supabase
             .from('erp_sync_logs')
-            .select('id,duration_seconds,started_at,completed_at,ended_at,created_at')
+            .select('id,duration_seconds,started_at,completed_at,created_at')
             .gte('started_at', startOfToday.toISOString());
           if (error) throw error;
           todayLogs = data || [];
@@ -102,20 +102,20 @@ export function IntegrationsDashboard() {
           todayLogs = [];
         }
         const todaySyncs = (todayLogs || []).length;
-        const todayDurations = (todayLogs || []).map((r: any) => {
-          if (r?.duration_seconds) return Number(r.duration_seconds) * 1000;
-          const startTs = r?.started_at || r?.created_at;
-          const endTs = r?.completed_at || r?.ended_at;
-          if (startTs && endTs) return Math.max(0, new Date(endTs).getTime() - new Date(startTs).getTime());
-          return 0;
-        }).filter((x: number) => x > 0);
+          const todayDurations = (todayLogs || []).map((r: any) => {
+            if (r?.duration_seconds) return Number(r.duration_seconds) * 1000;
+            const startTs = r?.started_at || r?.created_at;
+            const endTs = r?.completed_at || r?.created_at;
+            if (startTs && endTs) return Math.max(0, new Date(endTs).getTime() - new Date(startTs).getTime());
+            return 0;
+          }).filter((x: number) => x > 0);
         const avgTodayMs = todayDurations.length ? Math.round(todayDurations.reduce((a: number, b: number) => a + b, 0) / todayDurations.length) : null;
 
         let prevMonthLogs: any[] = [];
         try {
           const { data, error } = await supabase
             .from('erp_sync_logs')
-            .select('id,duration_seconds,started_at,completed_at,ended_at,created_at')
+            .select('id,duration_seconds,started_at,completed_at,created_at')
             .gte('started_at', startOfPrevMonth.toISOString())
             .lt('started_at', startOfThisMonth.toISOString());
           if (error) throw error;
@@ -125,13 +125,13 @@ export function IntegrationsDashboard() {
         }
         const prevDays = endOfPrevMonth.getDate() || 1;
         const prevMonthDailyAvg = (prevMonthLogs || []).length / prevDays;
-        const prevDurations = (prevMonthLogs || []).map((r: any) => {
-          if (r?.duration_seconds) return Number(r.duration_seconds) * 1000;
-          const startTs = r?.started_at || r?.created_at;
-          const endTs = r?.completed_at || r?.ended_at;
-          if (startTs && endTs) return Math.max(0, new Date(endTs).getTime() - new Date(startTs).getTime());
-          return 0;
-        }).filter((x: number) => x > 0);
+          const prevDurations = (prevMonthLogs || []).map((r: any) => {
+            if (r?.duration_seconds) return Number(r.duration_seconds) * 1000;
+            const startTs = r?.started_at || r?.created_at;
+            const endTs = r?.completed_at || r?.created_at;
+            if (startTs && endTs) return Math.max(0, new Date(endTs).getTime() - new Date(startTs).getTime());
+            return 0;
+          }).filter((x: number) => x > 0);
         const avgPrevMs = prevDurations.length ? Math.round(prevDurations.reduce((a: number, b: number) => a + b, 0) / prevDurations.length) : null;
 
         // Construir tarjetas
@@ -460,7 +460,7 @@ function IntegrationsOverview() {
   }, []);
 
   const handleSync = async (id: string | number) => {
-const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || 'http://localhost:8082';
+const apiBase = import.meta.env.VITE_AUTH_BACKEND_URL || '';
     setIntegrations(prev => prev.map(i => i.id === id ? { ...i, status: 'syncing' } : i));
     try {
       console.info('[Dashboard] Sync start', { id, apiBase });
